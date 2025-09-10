@@ -26,12 +26,33 @@ jobs:
     strategy:
       matrix:
         include:
-          # CGO version
-          # - os: windows-latest
-          #   goos: windows
-          #   goarch: amd64
-          #   cgo: true
-          #   output: payload-dumper-windows-amd64.exe
+          # Static CGO
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cgo: true
+            static: true
+            output: payload-dumper-linux-amd64-static
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            cgo: true
+            static: true
+            output: payload-dumper-linux-arm64-static
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            cgo: true
+            static: true
+            output: payload-dumper-darwin-amd64-cgo-static
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            cgo: true
+            static: true
+            output: payload-dumper-darwin-arm64-cgo-static
+
+          # Dynamic CGO
           - os: macos-13
             goos: darwin
             goarch: amd64
@@ -93,42 +114,18 @@ jobs:
 
       - name: Setup Go
         uses: actions/setup-go@v5
-        # if: matrix.os != 'windows-latest' || matrix.cgo != true
         with:
           go-version: '1.25'
-
-      # - name: Install Windows dependencies for CGO
-      #   if: matrix.os == 'windows-latest' && matrix.cgo == true
-      #   uses: msys2/setup-msys2@v2
-      #   with:
-      #     msystem: MINGW64
-      #     update: true
-      #     install: >-
-      #       mingw-w64-x86_64-go
-      #       mingw-w64-x86_64-xz
-      #       mingw-w64-x86_64-pkg-config
-      #       mingw-w64-x86_64-gcc
 
       - name: Install Linux dependencies for CGO
         if: (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') && matrix.cgo == true
         run: |
           sudo apt-get update
           sudo apt-get install -y liblzma-dev pkg-config
-
-      - name: Install macOS dependencies for CGO
-        if: matrix.os == 'macos-latest' && matrix.cgo == true
-        run: |
-          brew install xz pkg-config
-
-      # - name: Build CGO version (Windows)
-      #   if: matrix.cgo == true && matrix.os == 'windows-latest'
-      #   env:
-      #     GOOS: ${{ matrix.goos }}
-      #     GOARCH: ${{ matrix.goarch }}
-      #     CGO_ENABLED: 1
-      #   shell: msys2 {0}
-      #   run: |
-      #     go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          # For static builds, also install static libraries
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            sudo apt-get install -y liblzma-dev:$(dpkg --print-architecture) musl-dev
+          fi
 
       - name: Build CGO version (Linux)
         if: matrix.cgo == true && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm')
@@ -138,7 +135,16 @@ jobs:
           CGO_ENABLED: 1
         shell: bash
         run: |
-          go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            CGO_CFLAGS="$(pkg-config --cflags liblzma)" \
+            CGO_LDFLAGS="$(pkg-config --libs --static liblzma)" \
+            go build -a \
+              -ldflags='-linkmode external -extldflags "-static" -s -w' \
+              -o bin/${{ matrix.output }} \
+              ./cmd/payload-dumper
+          else
+            go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          fi
 
       - name: Build CGO version (Darwin)
         if: (matrix.os == 'macos-latest' || matrix.os == 'macos-13') && matrix.cgo == true
@@ -146,11 +152,23 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
-          CGO_CFLAGS: "-I/opt/homebrew/opt/xz/include"
-          CGO_LDFLAGS: "-L/opt/homebrew/opt/xz/lib"
         shell: bash
         run: |
-          go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+              CGO_CFLAGS="-I/opt/homebrew/opt/xz/include" \
+              CGO_LDFLAGS="/opt/homebrew/opt/xz/lib/liblzma.a" \
+              go build -a -ldflags="-s -w" -o bin/${{ matrix.output }} ./cmd/payload-dumper
+            else 
+              CGO_CFLAGS="-I/usr/local/opt/xz/include" \
+              CGO_LDFLAGS="/usr/local/opt/xz/lib/liblzma.a" \
+              go build -a -ldflags="-s -w" -o bin/${{ matrix.output }} ./cmd/payload-dumper
+            fi
+          else
+            CGO_CFLAGS="-I/opt/homebrew/opt/xz/include" \
+            CGO_LDFLAGS="-L/opt/homebrew/opt/xz/lib" \
+            go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          fi
 
       - name: Build Pure Go version
         if: matrix.cgo == false
@@ -178,8 +196,14 @@ jobs:
         shell: bash
         run: |
           cd bin
-          if [[ "${{ matrix.cgo }}" == "true" ]]; then
-            tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-cgo.tar.gz ${{ matrix.output }}
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-static.tar.gz ${{ matrix.output }}
+          elif [[ "${{ matrix.cgo }}" == "true" ]]; then
+            if [[ "${{ matrix.output }}" == *"brew"* ]]; then
+              tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-cgo-brew.tar.gz ${{ matrix.output }}
+            else
+              tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-cgo.tar.gz ${{ matrix.output }}
+            fi
           else
             tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz ${{ matrix.output }}
           fi
@@ -187,7 +211,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.cgo == true && '-cgo' || '' }}
+          name: payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.static == true && '-static' || (matrix.cgo == true && (contains(matrix.output, 'brew') && '-cgo-brew' || '-cgo') || '') }}
           path: |
             bin/*.zip
             bin/*.tar.gz
