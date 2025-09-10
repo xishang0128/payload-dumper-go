@@ -14,7 +14,7 @@ type MetadataMessages struct {
 
 // English metadata messages
 var EnglishMetadataMessages = MetadataMessages{
-	Use:   "metadata [payload_file]",
+	Use:   "metadata [payload_file URL/path]",
 	Short: "Extract metadata from payload file",
 	Long:  `Extract and display metadata information from Android OTA payload file.`,
 
@@ -26,7 +26,7 @@ var EnglishMetadataMessages = MetadataMessages{
 
 // Chinese metadata messages
 var ChineseMetadataMessages = MetadataMessages{
-	Use:   "metadata [payload文件]",
+	Use:   "metadata [payload 文件链接/路径]",
 	Short: "从payload文件中提取元数据",
 	Long:  `从Android OTA payload文件中提取并显示元数据信息。`,
 

@@ -15,7 +15,7 @@ type ListMessages struct {
 
 // English list messages
 var EnglishListMessages = ListMessages{
-	Use:   "list [payload_file]",
+	Use:   "list [payload_file URL/path]",
 	Short: "List partitions in payload file",
 	Long:  `List all partitions available in the Android OTA payload file.`,
 
@@ -28,7 +28,7 @@ var EnglishListMessages = ListMessages{
 
 // Chinese list messages
 var ChineseListMessages = ListMessages{
-	Use:   "list [payload文件]",
+	Use:   "list [payload 文件链接/路径]",
 	Short: "列出payload文件中的分区",
 	Long:  `列出Android OTA payload文件中的所有可用分区。`,
 

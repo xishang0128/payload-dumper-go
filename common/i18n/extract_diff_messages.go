@@ -14,7 +14,7 @@ type ExtractDiffMessages struct {
 
 // English extract-diff messages
 var EnglishExtractDiffMessages = ExtractDiffMessages{
-	Use:   "extract-diff [payload_file]",
+	Use:   "extract-diff [payload_file URL/path]",
 	Short: "Extract partitions from differential OTA payload",
 	Long:  `Extract partitions from differential OTA payload file using base images.`,
 
@@ -26,7 +26,7 @@ var EnglishExtractDiffMessages = ExtractDiffMessages{
 
 // Chinese extract-diff messages
 var ChineseExtractDiffMessages = ExtractDiffMessages{
-	Use:   "extract-diff [payload文件]",
+	Use:   "extract-diff [payload 文件链接/路径]",
 	Short: "从差分OTA payload中提取分区",
 	Long:  `使用基础镜像从差分OTA payload文件中提取分区。`,
 

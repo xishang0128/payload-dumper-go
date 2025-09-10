@@ -22,7 +22,7 @@ type ExtractMessages struct {
 
 // English extract messages
 var EnglishExtractMessages = ExtractMessages{
-	Use:   "extract [payload_file]",
+	Use:   "extract [payload_file URL/path]",
 	Short: "Extract partitions from payload file",
 	Long:  `Extract all or specified partitions from Android OTA payload file.`,
 
@@ -42,7 +42,7 @@ var EnglishExtractMessages = ExtractMessages{
 
 // Chinese extract messages
 var ChineseExtractMessages = ExtractMessages{
-	Use:   "extract [payload文件]",
+	Use:   "extract [payload 文件链接/路径]",
 	Short: "从payload文件中提取分区",
 	Long:  `从Android OTA payload文件中提取全部或指定的分区。`,
 
