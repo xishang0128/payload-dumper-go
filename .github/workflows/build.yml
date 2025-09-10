@@ -1,0 +1,230 @@
+name: Build
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag version to release'
+        required: false
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - v*
+    paths-ignore:
+      - 'README.md'
+      - 'README.zh-CN.md'
+      - '.github/ISSUE_TEMPLATE/**'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # CGO version
+          # - os: windows-latest
+          #   goos: windows
+          #   goarch: amd64
+          #   cgo: true
+          #   output: payload-dumper-windows-amd64.exe
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            cgo: true
+            output: payload-dumper-darwin-amd64-cgo-brew
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            cgo: true
+            output: payload-dumper-darwin-arm64-cgo-brew
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cgo: true
+            output: payload-dumper-linux-amd64-cgo
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            cgo: true
+            output: payload-dumper-linux-arm64-cgo
+
+          # Pure Go version only (no CGO dependencies)
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            cgo: false
+            output: payload-dumper-windows-amd64.exe
+          - os: windows-11-arm
+            goos: windows
+            goarch: arm64
+            cgo: false
+            output: payload-dumper-windows-arm64.exe
+
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            cgo: false
+            output: payload-dumper-darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            cgo: false
+            output: payload-dumper-darwin-arm64
+          
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cgo: false
+            output: payload-dumper-linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            cgo: false
+            output: payload-dumper-linux-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        # if: matrix.os != 'windows-latest' || matrix.cgo != true
+        with:
+          go-version: '1.25'
+
+      # - name: Install Windows dependencies for CGO
+      #   if: matrix.os == 'windows-latest' && matrix.cgo == true
+      #   uses: msys2/setup-msys2@v2
+      #   with:
+      #     msystem: MINGW64
+      #     update: true
+      #     install: >-
+      #       mingw-w64-x86_64-go
+      #       mingw-w64-x86_64-xz
+      #       mingw-w64-x86_64-pkg-config
+      #       mingw-w64-x86_64-gcc
+
+      - name: Install Linux dependencies for CGO
+        if: (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') && matrix.cgo == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y liblzma-dev pkg-config
+
+      - name: Install macOS dependencies for CGO
+        if: matrix.os == 'macos-latest' && matrix.cgo == true
+        run: |
+          brew install xz pkg-config
+
+      # - name: Build CGO version (Windows)
+      #   if: matrix.cgo == true && matrix.os == 'windows-latest'
+      #   env:
+      #     GOOS: ${{ matrix.goos }}
+      #     GOARCH: ${{ matrix.goarch }}
+      #     CGO_ENABLED: 1
+      #   shell: msys2 {0}
+      #   run: |
+      #     go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+
+      - name: Build CGO version (Linux)
+        if: matrix.cgo == true && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm')
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        shell: bash
+        run: |
+          go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+
+      - name: Build CGO version (Darwin)
+        if: (matrix.os == 'macos-latest' || matrix.os == 'macos-13') && matrix.cgo == true
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CGO_CFLAGS: "-I/opt/homebrew/opt/xz/include"
+          CGO_LDFLAGS: "-L/opt/homebrew/opt/xz/lib"
+        shell: bash
+        run: |
+          go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+
+      - name: Build Pure Go version
+        if: matrix.cgo == false
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        shell: bash
+        run: |
+          go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+
+      - name: Create archive (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          cd bin
+          if [[ "${{ matrix.cgo }}" == "true" ]]; then
+            7z a payload-dumper-windows-${{ matrix.goarch }}-cgo.zip ${{ matrix.output }}
+          else
+            7z a payload-dumper-windows-${{ matrix.goarch }}.zip ${{ matrix.output }}
+          fi
+
+      - name: Create archive (Unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          cd bin
+          if [[ "${{ matrix.cgo }}" == "true" ]]; then
+            tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-cgo.tar.gz ${{ matrix.output }}
+          else
+            tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz ${{ matrix.output }}
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.cgo == true && '-cgo' || '' }}
+          path: |
+            bin/*.zip
+            bin/*.tar.gz
+          retention-days: 30
+
+  pre-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: bin/
+          merge-multiple: true
+
+      - name: Delete current release assets
+        uses: 8Mi-Tech/delete-release-assets-action@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: pre-release
+          deleteOnlyFromDrafts: false
+
+      - name: Tag Repo
+        uses: richardsimko/update-tag@v1
+        with:
+          tag_name: pre-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pre-release
+          files: |
+            bin/*.zip
+            bin/*.tar.gz
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
