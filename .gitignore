@@ -2,7 +2,7 @@
 .vscode/
 vendor/
 .DS_Store
-output*/
+*output*/
 bin/
 
 payload-dumper*

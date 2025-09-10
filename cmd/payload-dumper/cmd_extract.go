@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
 	"github.com/xishang/payload-dumper-go/common/file"
 	"github.com/xishang/payload-dumper-go/common/i18n"
@@ -66,6 +67,12 @@ func runExtract(cmd *cobra.Command, args []string) {
 		for i, name := range partitionNames {
 			partitionNames[i] = strings.TrimSpace(name)
 		}
+	} else {
+		// Interactive partition selection when no partitions specified
+		partitionNames, err = selectPartitionsInteractively(d)
+		if err != nil {
+			log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
+		}
 	}
 
 	// Extract partitions
@@ -74,4 +81,53 @@ func runExtract(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Println(i18n.I18nMsg.Extract.ExtractionCompleted)
+}
+
+// selectPartitionsInteractively shows an interactive partition selector using survey
+func selectPartitionsInteractively(d *dumper.Dumper) ([]string, error) {
+	partitions, err := d.ListPartitions()
+	if err != nil {
+		return nil, fmt.Errorf(i18n.I18nMsg.Extract.FailedToListPartitions, err)
+	}
+
+	if len(partitions) == 0 {
+		return nil, fmt.Errorf(i18n.I18nMsg.Extract.NoPartitionsFound)
+	}
+
+	var options []string
+	for i, partition := range partitions {
+		options = append(options, fmt.Sprintf("%d. %s (%s)", i+1, partition.PartitionName, partition.SizeReadable))
+	}
+
+	prompt := &survey.MultiSelect{
+		Message:  i18n.I18nMsg.Extract.InteractiveSelection,
+		Options:  options,
+		Default:  nil,
+		PageSize: 15,
+	}
+
+	var result []string
+	err = survey.AskOne(prompt, &result)
+	if err != nil {
+		return nil, fmt.Errorf(i18n.I18nMsg.Extract.SelectionCancelled, err)
+	}
+
+	var selectedPartitions []string
+	for _, selection := range result {
+		parts := strings.SplitN(selection, ". ", 2)
+		if len(parts) >= 2 {
+			nameAndSize := parts[1]
+			nameParts := strings.Split(nameAndSize, " ")
+			if len(nameParts) >= 1 {
+				partitionName := nameParts[0]
+				selectedPartitions = append(selectedPartitions, partitionName)
+			}
+		}
+	}
+
+	if len(selectedPartitions) == 0 {
+		return nil, fmt.Errorf(i18n.I18nMsg.Extract.NoPartitionsSelected)
+	}
+
+	return selectedPartitions, nil
 }
