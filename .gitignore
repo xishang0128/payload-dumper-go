@@ -1,0 +1,9 @@
+.idea/
+.vscode/
+vendor/
+.DS_Store
+output*/
+bin/
+
+payload-dumper*
+*.zip
