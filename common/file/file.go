@@ -2,11 +2,16 @@
 package file
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
+
+	"github.com/xishang/payload-dumper-go/common/i18n"
 )
 
 // Reader interface for reading payload files
@@ -15,6 +20,78 @@ type Reader interface {
 	io.Closer
 	Size() int64
 	Read(offset int64, size int) ([]byte, error)
+}
+
+// createHTTPClientWithDNS creates an HTTP client with custom DNS configuration
+// For systems without /etc/resolv.conf, it sets up a fallback DNS server
+func createHTTPClientWithDNS() *http.Client {
+	// Check if /etc/resolv.conf exists
+	if _, err := os.Stat("/etc/resolv.conf"); os.IsNotExist(err) {
+		dnsServers := []string{"223.5.5.5:53", "1.1.1.1:53"}
+		fmt.Printf("%s, %s", i18n.I18nMsg.Common.DNSResolvConfNotFound,
+			fmt.Sprintf(i18n.I18nMsg.Common.DNSUsingFallbackServers, dnsServers))
+
+		dialer := &net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+
+		// Create custom resolver with fallback DNS servers
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				var lastErr error
+				for _, server := range dnsServers {
+					conn, err := dialer.DialContext(ctx, network, server)
+					if err == nil {
+						return conn, nil
+					}
+					lastErr = err
+				}
+				return nil, fmt.Errorf(i18n.I18nMsg.Common.DNSFailedToConnectToServers, lastErr)
+			},
+		}
+
+		// Create custom transport with custom resolver
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+
+				// Resolve using custom resolver
+				ips, err := resolver.LookupIPAddr(ctx, host)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(ips) == 0 {
+					return nil, fmt.Errorf(i18n.I18nMsg.Common.DNSNoIPAddressesFound, host)
+				}
+
+				// Try to connect to resolved IPs
+				for _, ip := range ips {
+					addr := net.JoinHostPort(ip.IP.String(), port)
+					conn, err := dialer.DialContext(ctx, network, addr)
+					if err == nil {
+						return conn, nil
+					}
+				}
+
+				return nil, fmt.Errorf(i18n.I18nMsg.Common.DNSFailedToConnect, addr)
+			},
+		}
+
+		return &http.Client{
+			Transport: transport,
+			Timeout:   5 * time.Minute,
+		}
+	}
+
+	return &http.Client{
+		Timeout: 5 * time.Minute,
+	}
 }
 
 // LocalFile implements Reader interface for local files
@@ -75,8 +152,9 @@ type HTTPFile struct {
 // NewHTTPFile opens an HTTP URL for reading.
 // The server must support range requests (Accept-Ranges: bytes).
 // Returns an HTTPFile that implements the Reader interface.
+// For systems without /etc/resolv.conf, it automatically configures fallback DNS.
 func NewHTTPFile(url string) (*HTTPFile, error) {
-	client := &http.Client{}
+	client := createHTTPClientWithDNS()
 
 	// Get file size using HEAD request
 	resp, err := client.Head(url)
@@ -86,21 +164,21 @@ func NewHTTPFile(url string) (*HTTPFile, error) {
 	defer resp.Body.Close()
 
 	if resp.Header.Get("Accept-Ranges") != "bytes" {
-		return nil, fmt.Errorf("remote does not support ranges")
+		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDoesNotSupportRanges)
 	}
 
 	contentLength := resp.Header.Get("Content-Length")
 	if contentLength == "" {
-		return nil, fmt.Errorf("remote has no length")
+		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteHasNoLength)
 	}
 
 	size, err := strconv.ParseInt(contentLength, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid content length: %v", err)
+		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPInvalidContentLength, err)
 	}
 
 	if size == 0 {
-		return nil, fmt.Errorf("remote has no length")
+		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteHasNoLength)
 	}
 
 	return &HTTPFile{
@@ -153,7 +231,7 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 206 {
-		return nil, fmt.Errorf("remote did not return partial content: %d", resp.StatusCode)
+		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
 	}
 
 	expectedSize := endPos - offset + 1
