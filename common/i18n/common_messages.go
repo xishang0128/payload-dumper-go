@@ -16,14 +16,6 @@ type CommonMessages struct {
 	DNSNoIPAddressesFound       string
 	DNSFailedToConnect          string
 
-	// TLS and certificate messages
-	TLSUsingFallbackCertificates  string
-	TLSCertificateVerificationOff string
-	TLSSystemCertPoolNotAvailable string
-	TLSSystemCertPoolWithFallback string
-	TLSBuiltInCertsLoadFailed     string
-	TLSBuiltInCertsLoadSuccess    string
-
 	// HTTP error messages
 	HTTPRemoteDoesNotSupportRanges string
 	HTTPRemoteHasNoLength          string
@@ -53,13 +45,6 @@ var EnglishCommonMessages = CommonMessages{
 	DNSNoIPAddressesFound:       "no IP addresses found for host %s",
 	DNSFailedToConnect:          "failed to connect to %s",
 
-	TLSUsingFallbackCertificates:  "Using built-in fallback certificates for TLS verification",
-	TLSCertificateVerificationOff: "TLS certificate verification disabled for compatibility",
-	TLSSystemCertPoolNotAvailable: "System cert pool not available, using built-in certificates: %v",
-	TLSSystemCertPoolWithFallback: "Using system cert pool with built-in certificates as fallback",
-	TLSBuiltInCertsLoadFailed:     "Warning: Failed to append some built-in certificates",
-	TLSBuiltInCertsLoadSuccess:    "Successfully loaded built-in CA certificates",
-
 	HTTPRemoteDoesNotSupportRanges: "remote does not support ranges",
 	HTTPRemoteHasNoLength:          "remote has no length",
 	HTTPInvalidContentLength:       "invalid content length: %v",
@@ -86,13 +71,6 @@ var ChineseCommonMessages = CommonMessages{
 	DNSFailedToConnectToServers: "无法连接到任何DNS服务器: %v",
 	DNSNoIPAddressesFound:       "未找到主机 %s 的IP地址",
 	DNSFailedToConnect:          "无法连接到 %s",
-
-	TLSUsingFallbackCertificates:  "使用内置备用证书进行TLS验证",
-	TLSCertificateVerificationOff: "为兼容性已禁用TLS证书验证",
-	TLSSystemCertPoolNotAvailable: "系统证书池不可用，使用内置证书: %v",
-	TLSSystemCertPoolWithFallback: "使用系统证书池，内置证书作为备用",
-	TLSBuiltInCertsLoadFailed:     "警告: 部分内置证书加载失败",
-	TLSBuiltInCertsLoadSuccess:    "成功加载内置CA证书",
 
 	HTTPRemoteDoesNotSupportRanges: "远程服务器不支持范围请求",
 	HTTPRemoteHasNoLength:          "远程服务器未提供内容长度",

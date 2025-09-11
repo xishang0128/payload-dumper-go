@@ -40,17 +40,7 @@ func createCustomCertPool() *x509.CertPool {
 	certPool, err := x509.SystemCertPool()
 	if err != nil {
 		// If system cert pool is not available, create empty pool
-		fmt.Printf(i18n.I18nMsg.Common.TLSSystemCertPoolNotAvailable+"\n", err)
 		certPool = x509.NewCertPool()
-	} else {
-		fmt.Printf(i18n.I18nMsg.Common.TLSSystemCertPoolWithFallback + "\n")
-	}
-
-	// Add built-in certificates
-	if !certPool.AppendCertsFromPEM([]byte(builtInCerts)) {
-		fmt.Printf(i18n.I18nMsg.Common.TLSBuiltInCertsLoadFailed + "\n")
-	} else {
-		fmt.Printf(i18n.I18nMsg.Common.TLSBuiltInCertsLoadSuccess + "\n")
 	}
 
 	return certPool
