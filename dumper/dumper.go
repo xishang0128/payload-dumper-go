@@ -538,6 +538,56 @@ func (d *Dumper) ListPartitions() ([]PartitionInfo, error) {
 	return partitionsInfo, nil
 }
 
+// ListPartitionsAsMap returns partition information as a map with partition names as keys.
+// This allows for efficient lookup of partition information by name.
+func (d *Dumper) ListPartitionsAsMap() (map[string]PartitionInfo, error) {
+	partitionsInfo := make(map[string]PartitionInfo)
+
+	for _, partition := range d.manifest.GetPartitions() {
+		var sizeInBlocks uint64
+		for _, operation := range partition.GetOperations() {
+			for _, extent := range operation.GetDstExtents() {
+				sizeInBlocks += extent.GetNumBlocks()
+			}
+		}
+
+		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
+		sizeReadable := formatSize(sizeInBytes)
+
+		hash := ""
+		if partition.GetNewPartitionInfo() != nil && partition.GetNewPartitionInfo().GetHash() != nil {
+			hash = fmt.Sprintf("%x", partition.GetNewPartitionInfo().GetHash())
+		}
+
+		partitionName := partition.GetPartitionName()
+		partitionsInfo[partitionName] = PartitionInfo{
+			PartitionName: partitionName,
+			SizeInBlocks:  sizeInBlocks,
+			SizeInBytes:   sizeInBytes,
+			SizeReadable:  sizeReadable,
+			Hash:          hash,
+		}
+	}
+
+	return partitionsInfo, nil
+}
+
+// GetPartitionInfo returns information for a specific partition by name.
+// Returns nil and an error if the partition is not found.
+func (d *Dumper) GetPartitionInfo(partitionName string) (*PartitionInfo, error) {
+	partitionsMap, err := d.ListPartitionsAsMap()
+	if err != nil {
+		return nil, err
+	}
+
+	info, exists := partitionsMap[partitionName]
+	if !exists {
+		return nil, fmt.Errorf(i18n.I18nMsg.Dumper.PartitionNotFound, partitionName)
+	}
+
+	return &info, nil
+}
+
 // ExtractMetadata extracts and returns the metadata from the payload.
 func (d *Dumper) ExtractMetadata() ([]byte, error) {
 	metadataPath := "META-INF/com/android/metadata"
