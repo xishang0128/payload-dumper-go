@@ -16,6 +16,16 @@ import (
 	"github.com/xishang/payload-dumper-go/common/i18n"
 )
 
+// Default User-Agent string for HTTP requests
+var UserAgent string = "curl/7.68.0" // Mimic curl User-Agent for better compatibility
+
+// SetUserAgent sets the User-Agent string for HTTP requests
+func SetUserAgent(ua string) {
+	if ua != "" {
+		UserAgent = ua
+	}
+}
+
 // Reader interface for reading payload files
 type Reader interface {
 	io.ReaderAt
@@ -189,8 +199,13 @@ type HTTPFile struct {
 func NewHTTPFile(url string) (*HTTPFile, error) {
 	client := createHTTPClientWithDNS()
 
-	// Get file size using HEAD request
-	resp, err := client.Head(url)
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +269,7 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 		return nil, err
 	}
 
+	req.Header.Set("User-Agent", UserAgent)
 	rangeHeader := fmt.Sprintf("bytes=%d-%d", offset, endPos)
 	req.Header.Set("Range", rangeHeader)
 

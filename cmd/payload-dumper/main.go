@@ -4,21 +4,30 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/xishang/payload-dumper-go/common/file"
 	"github.com/xishang/payload-dumper-go/common/i18n"
 )
 
-var rootCmd *cobra.Command
+var (
+	rootCmd   *cobra.Command
+	userAgent string
+)
 
 func init() {
-	// Initialize language support first
 	i18n.InitLanguage()
 
-	// Initialize root command with localized strings
 	rootCmd = &cobra.Command{
 		Use:   "payload-dumper",
 		Short: i18n.I18nMsg.App.AppDescription,
 		Long:  i18n.I18nMsg.App.AppLongDescription,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if userAgent != "" {
+				file.SetUserAgent(userAgent)
+			}
+		},
 	}
+
+	rootCmd.PersistentFlags().StringVar(&userAgent, "user-agent", "", i18n.I18nMsg.Common.FlagUserAgent)
 
 	initExtractCmd()
 	initListCmd()
