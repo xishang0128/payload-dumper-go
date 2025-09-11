@@ -31,9 +31,10 @@ type CommonMessages struct {
 	HTTPRemoteDidNotReturnPartial  string
 
 	// Common flag descriptions
-	FlagOut  string
-	FlagJSON string
-	FlagSave string
+	FlagOut     string
+	FlagJSON    string
+	FlagSave    string
+	ElapsedTime string
 }
 
 // English common messages
@@ -62,9 +63,10 @@ var EnglishCommonMessages = CommonMessages{
 	HTTPInvalidContentLength:       "invalid content length: %v",
 	HTTPRemoteDidNotReturnPartial:  "remote did not return partial content: %d",
 
-	FlagOut:  "output directory",
-	FlagJSON: "output as JSON",
-	FlagSave: "save to file",
+	FlagOut:     "output directory",
+	FlagJSON:    "output as JSON",
+	FlagSave:    "save to file",
+	ElapsedTime: "Elapsed time: %s",
 }
 
 // Chinese common messages
@@ -93,7 +95,8 @@ var ChineseCommonMessages = CommonMessages{
 	HTTPInvalidContentLength:       "无效的内容长度: %v",
 	HTTPRemoteDidNotReturnPartial:  "远程服务器未返回部分内容: %d",
 
-	FlagOut:  "输出目录",
-	FlagJSON: "以JSON格式输出",
-	FlagSave: "保存到文件",
+	FlagOut:     "输出目录",
+	FlagJSON:    "以JSON格式输出",
+	FlagSave:    "保存到文件",
+	ElapsedTime: "耗时: %s",
 }

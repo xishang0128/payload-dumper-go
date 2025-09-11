@@ -5,6 +5,7 @@ import (
 	"log"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
@@ -37,6 +38,12 @@ func initExtractCmd() {
 }
 
 func runExtract(cmd *cobra.Command, args []string) {
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
+	}()
+
 	payloadFile := args[0]
 
 	// Create file reader

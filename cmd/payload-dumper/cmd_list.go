@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/xishang/payload-dumper-go/common/file"
@@ -38,6 +39,12 @@ func initListCmd() {
 }
 
 func runList(cmd *cobra.Command, args []string) {
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
+	}()
+
 	payloadFile := args[0]
 
 	// Create file reader
