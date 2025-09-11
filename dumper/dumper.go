@@ -46,6 +46,19 @@ type PartitionInfo struct {
 	Hash          string `json:"hash"`
 }
 
+// ProgressInfo represents progress information for extraction
+type ProgressInfo struct {
+	PartitionName    string  `json:"partition_name"`
+	TotalOperations  int     `json:"total_operations"`
+	CompletedOps     int     `json:"completed_operations"`
+	ProgressPercent  float64 `json:"progress_percent"`
+	OperationsPerSec float64 `json:"operations_per_sec"`
+	EstimatedTime    string  `json:"estimated_time"`
+}
+
+// ProgressCallback is a function type for receiving progress updates
+type ProgressCallback func(progress ProgressInfo)
+
 // Operation represents an operation to be performed
 type Operation struct {
 	Operation *metadata.InstallOperation
@@ -91,7 +104,14 @@ func New(reader file.Reader) (*Dumper, error) {
 // ExtractPartitions extracts specified partitions from the payload.
 // If partitionNames is empty, all partitions will be extracted.
 func (d *Dumper) ExtractPartitions(outputDir string, partitionNames []string, workers int) error {
-	return d.ExtractPartitionsWithOptions(outputDir, partitionNames, workers, false)
+	return d.ExtractPartitionsWithProgress(outputDir, partitionNames, workers, nil)
+}
+
+// ExtractPartitionsWithProgress extracts specified partitions with real-time progress reporting.
+// If partitionNames is empty, all partitions will be extracted.
+// The progressCallback will be called with progress updates during extraction.
+func (d *Dumper) ExtractPartitionsWithProgress(outputDir string, partitionNames []string, workers int, progressCallback ProgressCallback) error {
+	return d.ExtractPartitionsWithOptionsAndProgress(outputDir, partitionNames, workers, false, progressCallback)
 }
 
 // ExtractPartitionsWithOptions extracts specified partitions with configurable options.
@@ -99,6 +119,15 @@ func (d *Dumper) ExtractPartitions(outputDir string, partitionNames []string, wo
 // If useMemoryBuffer is true, partitions will be processed in memory before writing (uses more RAM but may be faster for small partitions).
 // If useMemoryBuffer is false, partitions will be written directly to disk (more memory efficient for large partitions).
 func (d *Dumper) ExtractPartitionsWithOptions(outputDir string, partitionNames []string, workers int, useMemoryBuffer bool) error {
+	return d.ExtractPartitionsWithOptionsAndProgress(outputDir, partitionNames, workers, useMemoryBuffer, nil)
+}
+
+// ExtractPartitionsWithOptionsAndProgress extracts specified partitions with configurable options and progress reporting.
+// If partitionNames is empty, all partitions will be extracted.
+// If useMemoryBuffer is true, partitions will be processed in memory before writing (uses more RAM but may be faster for small partitions).
+// If useMemoryBuffer is false, partitions will be written directly to disk (more memory efficient for large partitions).
+// The progressCallback will be called with progress updates during extraction.
+func (d *Dumper) ExtractPartitionsWithOptionsAndProgress(outputDir string, partitionNames []string, workers int, useMemoryBuffer bool, progressCallback ProgressCallback) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 	}
@@ -130,7 +159,7 @@ func (d *Dumper) ExtractPartitionsWithOptions(outputDir string, partitionNames [
 	}
 
 	if useMemoryBuffer {
-		return d.extractPartitionsViaMemory(partitions, outputDir)
+		return d.extractPartitionsViaMemory(partitions, outputDir, progressCallback)
 	}
 
 	partitionsWithOps := make([]PartitionWithOps, 0, len(partitions))
@@ -149,11 +178,11 @@ func (d *Dumper) ExtractPartitionsWithOptions(outputDir string, partitionNames [
 		})
 	}
 
-	return d.multiprocessPartitions(partitionsWithOps, outputDir, workers, false, "")
+	return d.multiprocessPartitions(partitionsWithOps, outputDir, workers, false, "", progressCallback)
 }
 
-// extractPartitionsViaMemory extracts partitions using memory buffers before writing to files
-func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpdate, outputDir string) error {
+// extractPartitionsViaMemory extracts partitions using memory buffers with progress reporting
+func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpdate, outputDir string, progressCallback ProgressCallback) error {
 	progress := mpb.New()
 
 	bars := make(map[string]*mpb.Bar)
@@ -213,7 +242,21 @@ func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpda
 
 			mu.Lock()
 			completedPartitions = append(completedPartitions, partitionName)
+			completed := len(completedPartitions)
+			total := len(partitions)
 			mu.Unlock()
+
+			// Call progress callback if provided
+			if progressCallback != nil {
+				progressPercent := float64(completed) / float64(total) * 100
+				progressInfo := ProgressInfo{
+					PartitionName:   partitionName,
+					TotalOperations: len(p.Operations),
+					CompletedOps:    len(p.Operations),
+					ProgressPercent: progressPercent,
+				}
+				progressCallback(progressInfo)
+			}
 		}(partition)
 	}
 
@@ -306,11 +349,11 @@ func (d *Dumper) extractSinglePartitionToBytesOptimized(partition *metadata.Part
 	return partitionData, nil
 }
 
-// extractPartitionsToBytes is a helper function for internal use
-func (d *Dumper) extractPartitionsToBytes(partitions []*metadata.PartitionUpdate) (map[string][]byte, error) {
+// extractPartitionsToBytesWithProgress is a helper function for internal use with progress reporting
+func (d *Dumper) extractPartitionsToBytesWithProgress(partitions []*metadata.PartitionUpdate, progressCallback ProgressCallback) (map[string][]byte, error) {
 	result := make(map[string][]byte)
 
-	for _, partition := range partitions {
+	for i, partition := range partitions {
 		partitionName := partition.GetPartitionName()
 
 		var sizeInBlocks uint64
@@ -332,11 +375,36 @@ func (d *Dumper) extractPartitionsToBytes(partitions []*metadata.PartitionUpdate
 			})
 		}
 
-		if err := d.processOperationsToBytes(operations, partitionData); err != nil {
+		var wrappedCallback func(int, int)
+		if progressCallback != nil {
+			wrappedCallback = func(completed, total int) {
+				progressPercent := float64(completed) / float64(total) * 100
+				progressInfo := ProgressInfo{
+					PartitionName:   partitionName,
+					TotalOperations: total,
+					CompletedOps:    completed,
+					ProgressPercent: progressPercent,
+				}
+				progressCallback(progressInfo)
+			}
+		}
+
+		if err := d.processOperationsToBytesWithProgress(operations, partitionData, wrappedCallback); err != nil {
 			return nil, fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToProcessPartition, partitionName, err)
 		}
 
 		result[partitionName] = partitionData
+
+		if progressCallback != nil {
+			overallProgress := float64(i+1) / float64(len(partitions)) * 100
+			progressInfo := ProgressInfo{
+				PartitionName:   partitionName,
+				TotalOperations: len(operations),
+				CompletedOps:    len(operations),
+				ProgressPercent: overallProgress,
+			}
+			progressCallback(progressInfo)
+		}
 	}
 
 	return result, nil
@@ -346,6 +414,13 @@ func (d *Dumper) extractPartitionsToBytes(partitions []*metadata.PartitionUpdate
 // Returns a map where keys are partition names and values are the partition data as byte slices.
 // If partitionNames is empty, all partitions will be extracted.
 func (d *Dumper) ExtractPartitionsToBytes(partitionNames []string) (map[string][]byte, error) {
+	return d.ExtractPartitionsToBytesWithProgress(partitionNames, nil)
+}
+
+// ExtractPartitionsToBytesWithProgress extracts specified partitions and returns their bytes with progress reporting.
+// Returns a map where keys are partition names and values are the partition data as byte slices.
+// If partitionNames is empty, all partitions will be extracted.
+func (d *Dumper) ExtractPartitionsToBytesWithProgress(partitionNames []string, progressCallback ProgressCallback) (map[string][]byte, error) {
 	var partitions []*metadata.PartitionUpdate
 
 	if len(partitionNames) == 0 {
@@ -372,11 +447,16 @@ func (d *Dumper) ExtractPartitionsToBytes(partitionNames []string) (map[string][
 		return make(map[string][]byte), nil
 	}
 
-	return d.extractPartitionsToBytes(partitions)
+	return d.extractPartitionsToBytesWithProgress(partitions, progressCallback)
 }
 
 // ExtractPartitionsDiff extracts partitions using differential OTA.
 func (d *Dumper) ExtractPartitionsDiff(outputDir string, oldDir string, partitionNames []string, workers int) error {
+	return d.ExtractPartitionsDiffWithProgress(outputDir, oldDir, partitionNames, workers, nil)
+}
+
+// ExtractPartitionsDiffWithProgress extracts partitions using differential OTA with progress reporting.
+func (d *Dumper) ExtractPartitionsDiffWithProgress(outputDir string, oldDir string, partitionNames []string, workers int, progressCallback ProgressCallback) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 	}
@@ -423,7 +503,7 @@ func (d *Dumper) ExtractPartitionsDiff(outputDir string, oldDir string, partitio
 		})
 	}
 
-	return d.multiprocessPartitions(partitionsWithOps, outputDir, workers, true, oldDir)
+	return d.multiprocessPartitions(partitionsWithOps, outputDir, workers, true, oldDir, progressCallback)
 }
 
 // ListPartitions returns partition information from the payload.
@@ -527,7 +607,7 @@ func (d *Dumper) parseMetadata() error {
 	return nil
 }
 
-func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir string, workers int, isDiff bool, oldDir string) error {
+func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir string, workers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
 	if workers <= 0 {
 		workers = runtime.NumCPU()
 	}
@@ -576,7 +656,7 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 			partitionName := p.Partition.GetPartitionName()
 			bar := bars[partitionName]
 
-			if err := d.processPartitionWithBar(p, outputDir, isDiff, oldDir, bar); err != nil {
+			if err := d.processPartition(p, outputDir, isDiff, oldDir, bar, progressCallback); err != nil {
 				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
 			} else {
 				mu.Lock()
@@ -603,7 +683,7 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 	return nil
 }
 
-func (d *Dumper) processPartitionWithBar(part PartitionWithOps, outputDir string, isDiff bool, oldDir string, bar *mpb.Bar) error {
+func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, isDiff bool, oldDir string, bar *mpb.Bar, progressCallback ProgressCallback) error {
 	partitionName := part.Partition.GetPartitionName()
 
 	outputPath := filepath.Join(outputDir, partitionName+".img")
@@ -623,7 +703,15 @@ func (d *Dumper) processPartitionWithBar(part PartitionWithOps, outputDir string
 		defer oldFile.Close()
 	}
 
-	return d.processOperationsOptimized(part.Operations, outFile, oldFile, isDiff, bar)
+	var wrappedCallback ProgressCallback
+	if progressCallback != nil {
+		wrappedCallback = func(progress ProgressInfo) {
+			progress.PartitionName = partitionName
+			progressCallback(progress)
+		}
+	}
+
+	return d.processOperationsOptimized(part.Operations, outFile, oldFile, isDiff, bar, wrappedCallback)
 }
 
 func formatSize(bytes uint64) string {
@@ -642,7 +730,7 @@ func formatSize(bytes uint64) string {
 	}
 }
 
-func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, bar *mpb.Bar) error {
+func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, bar *mpb.Bar, progressCallback ProgressCallback) error {
 	const maxBufferSize = 64 * 1024 * 1024 // 64MB
 	bufferPool := make(chan []byte, runtime.NumCPU())
 	for i := 0; i < runtime.NumCPU(); i++ {
@@ -662,6 +750,10 @@ func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
 
+	totalOps := len(operations)
+	var completedOps int64
+	var progressMutex sync.Mutex
+
 	for range workerCount {
 		go func() {
 			defer wg.Done()
@@ -669,6 +761,22 @@ func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.
 				err := d.processOperationOptimized(item.op, outFile, oldFile, isDiff, bufferPool)
 				resultChan <- err
 				bar.Increment()
+
+				if progressCallback != nil {
+					progressMutex.Lock()
+					completedOps++
+					current := int(completedOps)
+					progressPercent := float64(current) / float64(totalOps) * 100
+					progressMutex.Unlock()
+
+					progressInfo := ProgressInfo{
+						PartitionName:   "",
+						TotalOperations: totalOps,
+						CompletedOps:    current,
+						ProgressPercent: progressPercent,
+					}
+					progressCallback(progressInfo)
+				}
 			}
 		}()
 	}
@@ -827,11 +935,17 @@ func (d *Dumper) writeZerosThreadSafe(outFile *os.File, extents []*metadata.Exte
 	return nil
 }
 
-// processOperationsToBytes processes operations and writes data to a byte slice instead of a file
-func (d *Dumper) processOperationsToBytes(operations []Operation, buffer []byte) error {
-	for _, op := range operations {
+// processOperationsToBytesWithProgress processes operations with progress reporting
+func (d *Dumper) processOperationsToBytesWithProgress(operations []Operation, buffer []byte, progressCallback func(int, int)) error {
+	total := len(operations)
+	for i, op := range operations {
 		if err := d.processOperationToBytes(op, buffer); err != nil {
 			return err
+		}
+
+		// Report progress
+		if progressCallback != nil {
+			progressCallback(i+1, total)
 		}
 	}
 	return nil
