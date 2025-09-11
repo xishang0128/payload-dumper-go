@@ -1,4 +1,3 @@
-// Package dumper provides functionality for extracting Android OTA payload files.
 package dumper
 
 import (
@@ -24,7 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// GetXZImplementation 返回当前使用的 XZ 实现类型
+// GetXZImplementation returns the current XZ decompression implementation in use.
 func GetXZImplementation() string {
 	return getXZImplementation()
 }
@@ -73,11 +72,11 @@ type PartitionWithOps struct {
 //
 //	dumper, err := dumper.New(reader)
 func New(reader file.Reader) (*Dumper, error) {
+	i18n.InitLanguage()
 	dumper := &Dumper{
 		payloadFile: reader,
 	}
 
-	// Try to get ZIP entry offset
 	if offset, _, err := ziputil.GetStoredEntryOffset(reader, "payload.bin"); err == nil {
 		dumper.baseOffset = offset
 	}
@@ -92,8 +91,16 @@ func New(reader file.Reader) (*Dumper, error) {
 // ExtractPartitions extracts specified partitions from the payload.
 // If partitionNames is empty, all partitions will be extracted.
 func (d *Dumper) ExtractPartitions(outputDir string, partitionNames []string, workers int) error {
+	return d.ExtractPartitionsWithOptions(outputDir, partitionNames, workers, false)
+}
+
+// ExtractPartitionsWithOptions extracts specified partitions with configurable options.
+// If partitionNames is empty, all partitions will be extracted.
+// If useMemoryBuffer is true, partitions will be processed in memory before writing (uses more RAM but may be faster for small partitions).
+// If useMemoryBuffer is false, partitions will be written directly to disk (more memory efficient for large partitions).
+func (d *Dumper) ExtractPartitionsWithOptions(outputDir string, partitionNames []string, workers int, useMemoryBuffer bool) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %v", err)
+		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 	}
 
 	var partitions []*metadata.PartitionUpdate
@@ -122,6 +129,10 @@ func (d *Dumper) ExtractPartitions(outputDir string, partitionNames []string, wo
 		return nil
 	}
 
+	if useMemoryBuffer {
+		return d.extractPartitionsViaMemory(partitions, outputDir)
+	}
+
 	partitionsWithOps := make([]PartitionWithOps, 0, len(partitions))
 	for _, partition := range partitions {
 		operations := make([]Operation, 0, len(partition.Operations))
@@ -141,10 +152,233 @@ func (d *Dumper) ExtractPartitions(outputDir string, partitionNames []string, wo
 	return d.multiprocessPartitions(partitionsWithOps, outputDir, workers, false, "")
 }
 
+// extractPartitionsViaMemory extracts partitions using memory buffers before writing to files
+func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpdate, outputDir string) error {
+	progress := mpb.New()
+
+	bars := make(map[string]*mpb.Bar)
+	for _, partition := range partitions {
+		partitionName := partition.GetPartitionName()
+		var sizeInBlocks uint64
+		for _, operation := range partition.GetOperations() {
+			for _, extent := range operation.GetDstExtents() {
+				sizeInBlocks += extent.GetNumBlocks()
+			}
+		}
+		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
+		sizeReadable := formatSize(sizeInBytes)
+
+		partitionDesc := fmt.Sprintf("[%s](%s)", partitionName, sizeReadable)
+		bar := progress.AddBar(int64(len(partition.Operations)),
+			mpb.PrependDecorators(
+				decor.Name(partitionDesc, decor.WCSyncSpaceR),
+			),
+			mpb.AppendDecorators(
+				decor.Percentage(decor.WC{W: 5}),
+				decor.Counters(0, " | %d/%d"),
+				decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 6}, decor.WCSyncSpace),
+				decor.AverageSpeed(0, fmt.Sprintf(" | %%.2f %s", i18n.I18nMsg.Dumper.OpsSuffix)),
+			),
+		)
+		bars[partitionName] = bar
+	}
+
+	var completedPartitions []string
+	var mu sync.Mutex
+
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, runtime.NumCPU())
+
+	for _, partition := range partitions {
+		wg.Add(1)
+		go func(p *metadata.PartitionUpdate) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			partitionName := p.GetPartitionName()
+			bar := bars[partitionName]
+
+			data, err := d.extractSinglePartitionToBytesOptimized(p, bar)
+			if err != nil {
+				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
+				return
+			}
+
+			outputPath := filepath.Join(outputDir, partitionName+".img")
+			if err := os.WriteFile(outputPath, data, 0644); err != nil {
+				log.Printf(i18n.I18nMsg.Dumper.ErrorFailedToWritePartition, partitionName, err)
+				return
+			}
+
+			mu.Lock()
+			completedPartitions = append(completedPartitions, partitionName)
+			mu.Unlock()
+		}(partition)
+	}
+
+	wg.Wait()
+	progress.Wait()
+
+	if len(completedPartitions) > 0 {
+		fmt.Printf("\n" + i18n.I18nMsg.Dumper.CompletedPartitions)
+		for i, partition := range completedPartitions {
+			if i > 0 {
+				fmt.Printf(", ")
+			}
+			fmt.Printf("%s", partition)
+		}
+		fmt.Printf("\n")
+	}
+
+	return nil
+}
+
+// extractSinglePartitionToBytesOptimized extracts a single partition to bytes with optimized multi-threading
+func (d *Dumper) extractSinglePartitionToBytesOptimized(partition *metadata.PartitionUpdate, bar *mpb.Bar) ([]byte, error) {
+	var sizeInBlocks uint64
+	for _, operation := range partition.GetOperations() {
+		for _, extent := range operation.GetDstExtents() {
+			sizeInBlocks += extent.GetNumBlocks()
+		}
+	}
+	sizeInBytes := sizeInBlocks * uint64(d.blockSize)
+
+	partitionData := make([]byte, sizeInBytes)
+
+	operations := make([]Operation, 0, len(partition.Operations))
+	for _, operation := range partition.Operations {
+		operations = append(operations, Operation{
+			Operation: operation,
+			Offset:    d.dataOffset + int64(operation.GetDataOffset()),
+			Length:    operation.GetDataLength(),
+		})
+	}
+
+	const maxBufferSize = 64 * 1024 * 1024 // 64MB
+	bufferPool := make(chan []byte, runtime.NumCPU())
+	for i := 0; i < runtime.NumCPU(); i++ {
+		bufferPool <- make([]byte, 0, maxBufferSize)
+	}
+
+	type workItem struct {
+		index int
+		op    Operation
+	}
+
+	workChan := make(chan workItem, runtime.NumCPU()*2)
+	resultChan := make(chan error, len(operations))
+
+	workerCount := min(runtime.NumCPU(), len(operations))
+
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+
+	for range workerCount {
+		go func() {
+			defer wg.Done()
+			for item := range workChan {
+				err := d.processOperationToBytesOptimized(item.op, partitionData, bufferPool)
+				resultChan <- err
+				bar.Increment()
+			}
+		}()
+	}
+
+	go func() {
+		defer close(workChan)
+		for i, op := range operations {
+			workChan <- workItem{index: i, op: op}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	for err := range resultChan {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return partitionData, nil
+}
+
+// extractPartitionsToBytes is a helper function for internal use
+func (d *Dumper) extractPartitionsToBytes(partitions []*metadata.PartitionUpdate) (map[string][]byte, error) {
+	result := make(map[string][]byte)
+
+	for _, partition := range partitions {
+		partitionName := partition.GetPartitionName()
+
+		var sizeInBlocks uint64
+		for _, operation := range partition.GetOperations() {
+			for _, extent := range operation.GetDstExtents() {
+				sizeInBlocks += extent.GetNumBlocks()
+			}
+		}
+		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
+
+		partitionData := make([]byte, sizeInBytes)
+
+		operations := make([]Operation, 0, len(partition.Operations))
+		for _, operation := range partition.Operations {
+			operations = append(operations, Operation{
+				Operation: operation,
+				Offset:    d.dataOffset + int64(operation.GetDataOffset()),
+				Length:    operation.GetDataLength(),
+			})
+		}
+
+		if err := d.processOperationsToBytes(operations, partitionData); err != nil {
+			return nil, fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToProcessPartition, partitionName, err)
+		}
+
+		result[partitionName] = partitionData
+	}
+
+	return result, nil
+}
+
+// ExtractPartitionsToBytes extracts specified partitions from the payload and returns their bytes.
+// Returns a map where keys are partition names and values are the partition data as byte slices.
+// If partitionNames is empty, all partitions will be extracted.
+func (d *Dumper) ExtractPartitionsToBytes(partitionNames []string) (map[string][]byte, error) {
+	var partitions []*metadata.PartitionUpdate
+
+	if len(partitionNames) == 0 {
+		partitions = d.manifest.Partitions
+	} else {
+		for _, imageName := range partitionNames {
+			imageName = strings.TrimSpace(imageName)
+			found := false
+			for _, partition := range d.manifest.Partitions {
+				if partition.GetPartitionName() == imageName {
+					partitions = append(partitions, partition)
+					found = true
+					break
+				}
+			}
+			if !found {
+				fmt.Printf(i18n.I18nMsg.Dumper.PartitionNotFound+"\n", imageName)
+			}
+		}
+	}
+
+	if len(partitions) == 0 {
+		fmt.Println(i18n.I18nMsg.Dumper.NotOperatingOnPartitions)
+		return make(map[string][]byte), nil
+	}
+
+	return d.extractPartitionsToBytes(partitions)
+}
+
 // ExtractPartitionsDiff extracts partitions using differential OTA.
 func (d *Dumper) ExtractPartitionsDiff(outputDir string, oldDir string, partitionNames []string, workers int) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %v", err)
+		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 	}
 
 	var partitions []*metadata.PartitionUpdate
@@ -343,7 +577,7 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 			bar := bars[partitionName]
 
 			if err := d.processPartitionWithBar(p, outputDir, isDiff, oldDir, bar); err != nil {
-				log.Printf("Error processing partition %s: %v", partitionName, err)
+				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
 			} else {
 				mu.Lock()
 				completedPartitions = append(completedPartitions, partitionName)
@@ -588,6 +822,199 @@ func (d *Dumper) writeZerosThreadSafe(outFile *os.File, extents []*metadata.Exte
 
 			remaining -= chunkSize
 			offset += chunkSize
+		}
+	}
+	return nil
+}
+
+// processOperationsToBytes processes operations and writes data to a byte slice instead of a file
+func (d *Dumper) processOperationsToBytes(operations []Operation, buffer []byte) error {
+	for _, op := range operations {
+		if err := d.processOperationToBytes(op, buffer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// processOperationToBytes processes a single operation and writes data to a byte slice
+func (d *Dumper) processOperationToBytes(op Operation, buffer []byte) error {
+	operation := op.Operation
+
+	var data []byte
+	var err error
+
+	if op.Length > 0 {
+		data, err = d.payloadFile.Read(op.Offset, int(op.Length))
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToReadOperationData, err)
+		}
+	}
+
+	switch operation.GetType() {
+	case metadata.InstallOperation_REPLACE:
+		return d.writeToExtentsBytes(buffer, operation.GetDstExtents(), data)
+
+	case metadata.InstallOperation_REPLACE_BZ:
+		reader := bzip2.NewReader(bytes.NewReader(data))
+		decompressed, err := io.ReadAll(reader)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressBzip2, err)
+		}
+		return d.writeToExtentsBytes(buffer, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_REPLACE_XZ:
+		decompressed, err := decompressXZ(data)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressXZ, err)
+		}
+		return d.writeToExtentsBytes(buffer, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_ZERO:
+		return d.writeZerosBytes(buffer, operation.GetDstExtents())
+
+	case metadata.InstallOperation_SOURCE_COPY:
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorSourceCopyNotSupportedInBytes)
+
+	default:
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorUnsupportedOperationType, operation.GetType())
+	}
+}
+
+func (d *Dumper) writeToExtentsBytes(buffer []byte, extents []*metadata.Extent, data []byte) error {
+	dataOffset := 0
+	for _, extent := range extents {
+		blockOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
+		blockSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
+
+		if dataOffset+int(blockSize) > len(data) {
+			blockSize = int64(len(data) - dataOffset)
+		}
+
+		if blockSize <= 0 {
+			break
+		}
+
+		if blockOffset+blockSize > int64(len(buffer)) {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorWriteExceedBuffer)
+		}
+
+		copy(buffer[blockOffset:blockOffset+blockSize], data[dataOffset:dataOffset+int(blockSize)])
+		dataOffset += int(blockSize)
+	}
+	return nil
+}
+
+func (d *Dumper) writeZerosBytes(buffer []byte, extents []*metadata.Extent) error {
+	for _, extent := range extents {
+		blockOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
+		blockSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
+
+		if blockOffset+blockSize > int64(len(buffer)) {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorZeroWriteExceedBuffer)
+		}
+
+		// Clear the bytes to zero
+		for i := blockOffset; i < blockOffset+blockSize; i++ {
+			buffer[i] = 0
+		}
+	}
+	return nil
+}
+
+// processOperationToBytesOptimized processes a single operation with buffer pool optimization
+func (d *Dumper) processOperationToBytesOptimized(op Operation, buffer []byte, bufferPool chan []byte) error {
+	operation := op.Operation
+
+	var data []byte
+	var err error
+
+	if op.Length > 0 {
+		workBuffer := <-bufferPool
+		defer func() {
+			workBuffer = workBuffer[:0]
+			bufferPool <- workBuffer
+		}()
+
+		if cap(workBuffer) < int(op.Length) {
+			workBuffer = make([]byte, op.Length)
+		} else {
+			workBuffer = workBuffer[:op.Length]
+		}
+
+		data, err = d.payloadFile.Read(op.Offset, int(op.Length))
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToReadOperationData, err)
+		}
+	}
+
+	switch operation.GetType() {
+	case metadata.InstallOperation_REPLACE:
+		return d.writeToExtentsBytesThreadSafe(buffer, operation.GetDstExtents(), data)
+
+	case metadata.InstallOperation_REPLACE_BZ:
+		reader := bzip2.NewReader(bytes.NewReader(data))
+		decompressed, err := io.ReadAll(reader)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressBzip2, err)
+		}
+		return d.writeToExtentsBytesThreadSafe(buffer, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_REPLACE_XZ:
+		decompressed, err := decompressXZ(data)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressXZ, err)
+		}
+		return d.writeToExtentsBytesThreadSafe(buffer, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_ZERO:
+		return d.writeZerosBytesThreadSafe(buffer, operation.GetDstExtents())
+
+	case metadata.InstallOperation_SOURCE_COPY:
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorSourceCopyNotSupportedInBytes)
+
+	default:
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorUnsupportedOperationType, operation.GetType())
+	}
+}
+
+// writeToExtentsBytesThreadSafe writes data to specific extents in a byte slice with thread safety
+func (d *Dumper) writeToExtentsBytesThreadSafe(buffer []byte, extents []*metadata.Extent, data []byte) error {
+	dataOffset := 0
+	for _, extent := range extents {
+		blockOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
+		blockSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
+
+		if dataOffset+int(blockSize) > len(data) {
+			blockSize = int64(len(data) - dataOffset)
+		}
+
+		if blockSize <= 0 {
+			break
+		}
+
+		if blockOffset+blockSize > int64(len(buffer)) {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorWriteExceedBuffer)
+		}
+
+		copy(buffer[blockOffset:blockOffset+blockSize], data[dataOffset:dataOffset+int(blockSize)])
+		dataOffset += int(blockSize)
+	}
+	return nil
+}
+
+// writeZerosBytesThreadSafe writes zeros to specific extents in a byte slice with thread safety
+func (d *Dumper) writeZerosBytesThreadSafe(buffer []byte, extents []*metadata.Extent) error {
+	for _, extent := range extents {
+		blockOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
+		blockSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
+
+		if blockOffset+blockSize > int64(len(buffer)) {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorZeroWriteExceedBuffer)
+		}
+
+		for i := blockOffset; i < blockOffset+blockSize; i++ {
+			buffer[i] = 0
 		}
 	}
 	return nil

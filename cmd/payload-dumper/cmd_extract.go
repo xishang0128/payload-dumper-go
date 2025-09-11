@@ -18,6 +18,7 @@ var (
 	extractOut        string
 	extractPartitions string
 	extractWorkers    int
+	extractUseBuffer  bool
 )
 
 func initExtractCmd() {
@@ -33,6 +34,7 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
+	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
 
 	rootCmd.AddCommand(extractCmd)
 }
@@ -83,7 +85,7 @@ func runExtract(cmd *cobra.Command, args []string) {
 	}
 
 	// Extract partitions
-	if err := d.ExtractPartitions(extractOut, partitionNames, extractWorkers); err != nil {
+	if err := d.ExtractPartitionsWithOptions(extractOut, partitionNames, extractWorkers, extractUseBuffer); err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.ErrorFailedToExtract, err)
 	}
 

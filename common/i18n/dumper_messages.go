@@ -21,11 +21,21 @@ type DumperMessages struct {
 	ErrorFailedToExtractMetadata   string
 	ErrorFailedToReadMetadata      string
 
+	// Additional internal errors
+	ErrorFailedToProcessPartition      string
+	ErrorSourceCopyNotSupportedInBytes string
+	ErrorWriteExceedBuffer             string
+	ErrorZeroWriteExceedBuffer         string
+
 	// Info messages
 	PartitionNotFound        string
 	NotOperatingOnPartitions string
 	CompletedPartitions      string
 	ProcessingPartition      string
+
+	// Additional log/info messages
+	ErrorProcessingPartition    string
+	ErrorFailedToWritePartition string
 
 	// Progress related
 	Operations string
@@ -53,11 +63,21 @@ var EnglishDumperMessages = DumperMessages{
 	ErrorFailedToExtractMetadata:   "failed to extract %s: %v",
 	ErrorFailedToReadMetadata:      "failed to read metadata: %v",
 
+	// Additional internal errors
+	ErrorFailedToProcessPartition:      "failed to process partition %s: %v",
+	ErrorSourceCopyNotSupportedInBytes: "SOURCE_COPY operation not supported in bytes mode",
+	ErrorWriteExceedBuffer:             "write would exceed buffer bounds",
+	ErrorZeroWriteExceedBuffer:         "zero write would exceed buffer bounds",
+
 	// Info messages
 	PartitionNotFound:        "Partition %s not found in image",
 	NotOperatingOnPartitions: "Not operating on any partitions",
 	CompletedPartitions:      "Completed partitions: ",
 	ProcessingPartition:      "Processing partition %s: %v",
+
+	// Additional log/info messages
+	ErrorProcessingPartition:    "Error processing partition %s: %v",
+	ErrorFailedToWritePartition: "Failed to write partition %s: %v",
 
 	// Progress related
 	Operations: "ops",
@@ -85,11 +105,21 @@ var ChineseDumperMessages = DumperMessages{
 	ErrorFailedToExtractMetadata:   "提取%s失败: %v",
 	ErrorFailedToReadMetadata:      "读取元数据失败: %v",
 
+	// Additional internal errors
+	ErrorFailedToProcessPartition:      "处理分区 %s 失败: %v",
+	ErrorSourceCopyNotSupportedInBytes: "在字节模式下不支持 SOURCE_COPY 操作",
+	ErrorWriteExceedBuffer:             "写入将超出缓冲区边界",
+	ErrorZeroWriteExceedBuffer:         "写入零值将超出缓冲区边界",
+
 	// Info messages
 	PartitionNotFound:        "镜像中未找到分区 %s",
 	NotOperatingOnPartitions: "没有分区需要处理",
 	CompletedPartitions:      "已完成的分区: ",
 	ProcessingPartition:      "正在处理分区 %s: %v",
+
+	// Additional log/info messages
+	ErrorProcessingPartition:    "处理分区 %s 时出错: %v",
+	ErrorFailedToWritePartition: "写入分区 %s 失败: %v",
 
 	// Progress related
 	Operations: "操作",

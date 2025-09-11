@@ -36,6 +36,7 @@ type CommonMessages struct {
 	FlagSave      string
 	FlagUserAgent string
 	ElapsedTime   string
+	FlagBuffer    string
 }
 
 // English common messages
@@ -69,6 +70,7 @@ var EnglishCommonMessages = CommonMessages{
 	FlagSave:      "save to file",
 	FlagUserAgent: "Set User-Agent for HTTP requests",
 	ElapsedTime:   "Elapsed time: %s",
+	FlagBuffer:    "use memory buffering (loads entire partition into memory before writing, provides better error handling but uses more RAM)",
 }
 
 // Chinese common messages
@@ -102,4 +104,5 @@ var ChineseCommonMessages = CommonMessages{
 	FlagSave:      "保存到文件",
 	FlagUserAgent: "设置HTTP请求的User-Agent",
 	ElapsedTime:   "耗时: %s",
+	FlagBuffer:    "使用内存缓冲（将整个分区加载到内存后再写入，提供更好的错误处理但占用更多内存）",
 }
