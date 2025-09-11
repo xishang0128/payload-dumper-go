@@ -30,21 +30,23 @@ jobs:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
+            goamd64: v3
             cgo: true
             static: true
-            output: payload-dumper-linux-amd64-static
+            output: payload-dumper-linux-amd64-v3-cgo-static
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
             cgo: true
             static: true
-            output: payload-dumper-linux-arm64-static
+            output: payload-dumper-linux-arm64-cgo-static
           - os: macos-13
             goos: darwin
             goarch: amd64
+            goamd64: v3
             cgo: true
             static: true
-            output: payload-dumper-darwin-amd64-cgo-static
+            output: payload-dumper-darwin-amd64-v3-cgo-static
           - os: macos-latest
             goos: darwin
             goarch: arm64
@@ -56,8 +58,9 @@ jobs:
           - os: macos-13
             goos: darwin
             goarch: amd64
+            goamd64: v3
             cgo: true
-            output: payload-dumper-darwin-amd64-cgo-brew
+            output: payload-dumper-darwin-amd64-v3-cgo-brew
           - os: macos-latest
             goos: darwin
             goarch: arm64
@@ -66,42 +69,44 @@ jobs:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
+            goamd64: v3
             cgo: true
-            output: payload-dumper-linux-amd64-cgo
+            output: payload-dumper-linux-amd64-v3-cgo-gcc
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
             cgo: true
-            output: payload-dumper-linux-arm64-cgo
+            output: payload-dumper-linux-arm64-cgo-gcc
 
           # Pure Go version only (no CGO dependencies)
-          - os: windows-latest
+          - os: ubuntu-latest
             goos: windows
             goarch: amd64
+            goamd64: v3
             cgo: false
-            output: payload-dumper-windows-amd64.exe
-          - os: windows-11-arm
+            output: payload-dumper-windows-amd64-v3
+          - os: ubuntu-latest
             goos: windows
             goarch: arm64
             cgo: false
-            output: payload-dumper-windows-arm64.exe
-
-          - os: macos-latest
+            output: payload-dumper-windows-arm64
+          - os: ubuntu-latest
             goos: darwin
             goarch: amd64
+            goamd64: v3
             cgo: false
-            output: payload-dumper-darwin-amd64
-          - os: macos-latest
+            output: payload-dumper-darwin-amd64-v3
+          - os: ubuntu-latest
             goos: darwin
             goarch: arm64
             cgo: false
             output: payload-dumper-darwin-arm64
-          
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
+            goamd64: v3
             cgo: false
-            output: payload-dumper-linux-amd64
+            output: payload-dumper-linux-amd64-v3
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
@@ -111,6 +116,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Update built-in CA certificates
+        run: |
+          curl -L -o common/file/ca-certificates.crt https://curl.se/ca/cacert.pem
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -132,6 +141,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOAMD64: ${{ matrix.goamd64 }}
           CGO_ENABLED: 1
         shell: bash
         run: |
@@ -151,6 +161,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOAMD64: ${{ matrix.goamd64 }}
           CGO_ENABLED: 1
         shell: bash
         run: |
@@ -175,43 +186,34 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOAMD64: ${{ matrix.goamd64 }}
           CGO_ENABLED: 0
         shell: bash
         run: |
-          go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            go build -o bin/${{ matrix.output }}.exe ./cmd/payload-dumper
+          else
+            go build -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          fi
 
       - name: Create archive (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.goos == 'windows'
         shell: bash
         run: |
           cd bin
-          if [[ "${{ matrix.cgo }}" == "true" ]]; then
-            7z a payload-dumper-windows-${{ matrix.goarch }}-cgo.zip ${{ matrix.output }}
-          else
-            7z a payload-dumper-windows-${{ matrix.goarch }}.zip ${{ matrix.output }}
-          fi
+          7z a ${{ matrix.output }}.zip ${{ matrix.output }}.exe
 
       - name: Create archive (Unix)
-        if: matrix.os != 'windows-latest'
+        if: matrix.goos != 'windows'
         shell: bash
         run: |
           cd bin
-          if [[ "${{ matrix.static }}" == "true" ]]; then
-            tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-static.tar.gz ${{ matrix.output }}
-          elif [[ "${{ matrix.cgo }}" == "true" ]]; then
-            if [[ "${{ matrix.output }}" == *"brew"* ]]; then
-              tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-cgo-brew.tar.gz ${{ matrix.output }}
-            else
-              tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}-cgo.tar.gz ${{ matrix.output }}
-            fi
-          else
-            tar -czf payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz ${{ matrix.output }}
-          fi
+          tar -czf ${{ matrix.output }}.tar.gz ${{ matrix.output }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: payload-dumper-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.static == true && '-static' || (matrix.cgo == true && (contains(matrix.output, 'brew') && '-cgo-brew' || '-cgo') || '') }}
+          name: ${{ matrix.output }}
           path: |
             bin/*.zip
             bin/*.tar.gz

@@ -3,6 +3,8 @@ package file
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +22,28 @@ type Reader interface {
 	io.Closer
 	Size() int64
 	Read(offset int64, size int) ([]byte, error)
+}
+
+// createCustomCertPool creates a certificate pool with built-in certificates
+func createCustomCertPool() *x509.CertPool {
+	// Try to use system cert pool first
+	certPool, err := x509.SystemCertPool()
+	if err != nil {
+		// If system cert pool is not available, create empty pool
+		fmt.Printf(i18n.I18nMsg.Common.TLSSystemCertPoolNotAvailable+"\n", err)
+		certPool = x509.NewCertPool()
+	} else {
+		fmt.Printf(i18n.I18nMsg.Common.TLSSystemCertPoolWithFallback + "\n")
+	}
+
+	// Add built-in certificates
+	if !certPool.AppendCertsFromPEM([]byte(builtInCerts)) {
+		fmt.Printf(i18n.I18nMsg.Common.TLSBuiltInCertsLoadFailed + "\n")
+	} else {
+		fmt.Printf(i18n.I18nMsg.Common.TLSBuiltInCertsLoadSuccess + "\n")
+	}
+
+	return certPool
 }
 
 // createHTTPClientWithDNS creates an HTTP client with custom DNS configuration
@@ -81,6 +105,9 @@ func createHTTPClientWithDNS() *http.Client {
 
 				return nil, fmt.Errorf(i18n.I18nMsg.Common.DNSFailedToConnect, addr)
 			},
+			TLSClientConfig: &tls.Config{
+				RootCAs: createCustomCertPool(),
+			},
 		}
 
 		return &http.Client{
@@ -89,7 +116,13 @@ func createHTTPClientWithDNS() *http.Client {
 		}
 	}
 
+	// System has /etc/resolv.conf, use default client with custom cert pool
 	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: createCustomCertPool(),
+			},
+		},
 		Timeout: 5 * time.Minute,
 	}
 }
