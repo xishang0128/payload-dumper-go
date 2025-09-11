@@ -12,19 +12,21 @@
 
 ### 命令行工具
 ```bash
-go install github.com/xishang/payload-dumper-go/cmd/payload-dumper@latest
+go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@latest
 ```
+
+或者下载预编译的二进制文件：[Releases](https://github.com/xishang0128/payload-dumper-go/releases)
 
 ### Go 库
 ```bash
-go get github.com/xishang/payload-dumper-go
+go get github.com/xishang0128/payload-dumper-go
 ```
 
 ## 使用
 
 ### 基本用法
 ```bash
-# 提取所有分区
+# 使用选择器提取分区
 payload-dumper extract payload.bin
 
 # 提取指定分区
@@ -55,8 +57,8 @@ payload-dumper --help
 package main
 
 import (
-    "github.com/xishang/payload-dumper-go/dumper"
-    "github.com/xishang/payload-dumper-go/common/file"
+    "github.com/xishang0128/payload-dumper-go/dumper"
+    "github.com/xishang0128/payload-dumper-go/common/file"
 )
 
 func main() {

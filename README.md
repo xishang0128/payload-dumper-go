@@ -14,19 +14,21 @@ A Go library and command-line tool for extracting Android OTA payload files.
 
 ### Command-line tool
 ```bash
-go install github.com/xishang/payload-dumper-go/cmd/payload-dumper@latest
+go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@latest
 ```
+
+Or download prebuilt binaries from the Releases page: https://github.com/xishang0128/payload-dumper-go/releases
 
 ### Go library
 ```bash
-go get github.com/xishang/payload-dumper-go
+go get github.com/xishang0128/payload-dumper-go
 ```
 
 ## Usage
 
 ### Basic usage
 ```bash
-# Extract all partitions
+# Use selector to extract partitions
 payload-dumper extract payload.bin
 
 # Extract specific partitions
@@ -57,8 +59,8 @@ payload-dumper --help
 package main
 
 import (
-    "github.com/xishang/payload-dumper-go/dumper"
-    "github.com/xishang/payload-dumper-go/common/file"
+    "github.com/xishang0128/payload-dumper-go/dumper"
+    "github.com/xishang0128/payload-dumper-go/common/file"
 )
 
 func main() {
