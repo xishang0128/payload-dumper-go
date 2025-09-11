@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/xishang/payload-dumper-go/common/file"
+	"github.com/xishang0128/payload-dumper-go/common/file"
 )
 
 const (

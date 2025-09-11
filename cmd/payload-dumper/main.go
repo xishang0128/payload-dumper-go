@@ -4,8 +4,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/xishang/payload-dumper-go/common/file"
-	"github.com/xishang/payload-dumper-go/common/i18n"
+	"github.com/xishang0128/payload-dumper-go/common/file"
+	"github.com/xishang0128/payload-dumper-go/common/i18n"
 )
 
 var (

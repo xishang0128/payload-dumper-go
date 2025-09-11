@@ -1,4 +1,4 @@
-module github.com/xishang/payload-dumper-go
+module github.com/xishang0128/payload-dumper-go
 
 go 1.23.0
 
