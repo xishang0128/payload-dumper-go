@@ -263,17 +263,6 @@ func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpda
 	wg.Wait()
 	progress.Wait()
 
-	if len(completedPartitions) > 0 {
-		fmt.Printf("\n" + i18n.I18nMsg.Dumper.CompletedPartitions)
-		for i, partition := range completedPartitions {
-			if i > 0 {
-				fmt.Printf(", ")
-			}
-			fmt.Printf("%s", partition)
-		}
-		fmt.Printf("\n")
-	}
-
 	return nil
 }
 
@@ -718,17 +707,6 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 
 	wg.Wait()
 	progress.Wait()
-
-	if len(completedPartitions) > 0 {
-		fmt.Printf("\n" + i18n.I18nMsg.Dumper.CompletedPartitions)
-		for i, partition := range completedPartitions {
-			if i > 0 {
-				fmt.Printf(", ")
-			}
-			fmt.Printf("%s", partition)
-		}
-		fmt.Printf("\n")
-	}
 
 	return nil
 }

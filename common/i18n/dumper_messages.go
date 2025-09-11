@@ -30,8 +30,6 @@ type DumperMessages struct {
 	// Info messages
 	PartitionNotFound        string
 	NotOperatingOnPartitions string
-	CompletedPartitions      string
-	ProcessingPartition      string
 
 	// Additional log/info messages
 	ErrorProcessingPartition    string
@@ -72,8 +70,6 @@ var EnglishDumperMessages = DumperMessages{
 	// Info messages
 	PartitionNotFound:        "Partition %s not found in image",
 	NotOperatingOnPartitions: "Not operating on any partitions",
-	CompletedPartitions:      "Completed partitions: ",
-	ProcessingPartition:      "Processing partition %s: %v",
 
 	// Additional log/info messages
 	ErrorProcessingPartition:    "Error processing partition %s: %v",
@@ -114,8 +110,6 @@ var ChineseDumperMessages = DumperMessages{
 	// Info messages
 	PartitionNotFound:        "镜像中未找到分区 %s",
 	NotOperatingOnPartitions: "没有分区需要处理",
-	CompletedPartitions:      "已完成的分区: ",
-	ProcessingPartition:      "正在处理分区 %s: %v",
 
 	// Additional log/info messages
 	ErrorProcessingPartition:    "处理分区 %s 时出错: %v",
