@@ -6,9 +6,11 @@ type ExtractMessages struct {
 	Short string
 	Long  string
 
-	FlagPartitions  string
-	FlagWorkers     string
-	FlagHTTPWorkers string
+	FlagPartitions            string
+	FlagWorkers               string
+	FlagHTTPWorkers           string
+	FlagHTTPCacheSize         string
+	ErrorInvalidHTTPCacheSize string
 
 	ErrorFailedToExtract string
 	ExtractionCompleted  string
@@ -40,9 +42,11 @@ var EnglishExtractMessages = ExtractMessages{
 	Short: "Extract partitions from payload file",
 	Long:  `Extract all or specified partitions from Android OTA payload file.`,
 
-	FlagPartitions:  "comma separated list of partitions to extract",
-	FlagWorkers:     "number of workers",
-	FlagHTTPWorkers: "max concurrent HTTP range requests (0 = unlimited)",
+	FlagPartitions:            "comma separated list of partitions to extract",
+	FlagWorkers:               "number of workers",
+	FlagHTTPWorkers:           "max concurrent HTTP range requests (0 = unlimited)",
+	FlagHTTPCacheSize:         "size of HTTP read cache (supports suffix K/M/G, e.g. 4M; 0 = default 1 MiB)",
+	ErrorInvalidHTTPCacheSize: "invalid http-cache-size: %v",
 
 	ErrorFailedToExtract: "Failed to extract partitions: %v",
 	ExtractionCompleted:  "Extraction completed successfully!",
@@ -74,9 +78,11 @@ var ChineseExtractMessages = ExtractMessages{
 	Short: "从 payload 文件中提取分区",
 	Long:  `从 Android OTA payload 文件中提取全部或指定的分区。`,
 
-	FlagPartitions:  "要提取的分区列表，用逗号分隔",
-	FlagWorkers:     "工作线程数",
-	FlagHTTPWorkers: "最大并发 HTTP Range 请求数 (0 = 不限制)",
+	FlagPartitions:            "要提取的分区列表，用逗号分隔",
+	FlagWorkers:               "工作线程数",
+	FlagHTTPWorkers:           "最大并发 HTTP Range 请求数 (0 = 不限制)",
+	FlagHTTPCacheSize:         "HTTP 读取缓存大小，支持后缀 K/M/G，例如 4M；0 = 默认 1 MiB",
+	ErrorInvalidHTTPCacheSize: "无效的 http-cache-size: %v",
 
 	ErrorFailedToExtract: "无法提取分区: %v",
 	ExtractionCompleted:  "提取完成！",

@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"time"
 
+	"sync"
+
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 )
 
@@ -44,6 +46,17 @@ var HTTPMaxConcurrentRequests int
 // httpRequestSem is a semaphore used to limit concurrent HTTP requests when
 // HTTPMaxConcurrentRequests > 0. It is lazily initialized when the max is set.
 var httpRequestSem chan struct{}
+
+// HTTPReadCacheSize controls the size of the per-HTTP-file read cache (in bytes).
+// Default 1 MiB. Set to 0 to disable caching.
+var HTTPReadCacheSize int64 = 1 << 20 // 1 MiB
+
+// SetHTTPReadCacheSize allows adjusting read cache size programmatically.
+func SetHTTPReadCacheSize(n int64) {
+	if n >= 0 {
+		HTTPReadCacheSize = n
+	}
+}
 
 // SetHTTPMaxConcurrentRequests sets the maximum number of concurrent HTTP
 // requests. If max <= 0, concurrency is unlimited.
@@ -223,6 +236,11 @@ type HTTPFile struct {
 	url    string
 	client *http.Client
 	size   int64
+
+	cache      []byte
+	cacheStart int64
+	cacheEnd   int64
+	cacheMu    sync.Mutex
 }
 
 // NewHTTPFile opens an HTTP URL for reading.
@@ -297,23 +315,60 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 		endPos = f.size - 1
 	}
 
-	// Retry logic for transient network issues and partial reads
+	// Simple read cache: if the requested range is fully inside the cache, return from cache.
+	// Otherwise, fetch a larger block (HTTPReadCacheSize or at least requested size) and populate cache.
 	const maxRetries = 3
 	var lastErr error
 	expectedSize := endPos - offset + 1
+
+	// Serve from cache if enabled and hit
+	if HTTPReadCacheSize > 0 {
+		f.cacheMu.Lock()
+		if f.cache != nil && offset >= f.cacheStart && endPos <= f.cacheEnd {
+			// cache hit — perform safe int conversions and bounds checks
+			start64 := offset - f.cacheStart
+			reqLen64 := expectedSize
+			// convert to int after checking sizes
+			if start64 >= 0 && reqLen64 >= 0 {
+				iStart := int(start64)
+				iLen := int(reqLen64)
+				iEnd := iStart + iLen
+				if iStart >= 0 && iEnd <= len(f.cache) {
+					data := make([]byte, iLen)
+					copy(data, f.cache[iStart:iEnd])
+					f.cacheMu.Unlock()
+					return data, nil
+				}
+			}
+		}
+		f.cacheMu.Unlock()
+	}
+
+	// Determine fetch size
+	fetchSize := expectedSize
+	if HTTPReadCacheSize > 0 && HTTPReadCacheSize > fetchSize {
+		fetchSize = HTTPReadCacheSize
+	}
+
 	// If a global semaphore is set, acquire a token to limit concurrent HTTP requests
 	if httpRequestSem != nil {
 		httpRequestSem <- struct{}{}
 		defer func() { <-httpRequestSem }()
 	}
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// adjust fetch range to not exceed file size
+		fetchEnd := offset + fetchSize - 1
+		if fetchEnd >= f.size {
+			fetchEnd = f.size - 1
+		}
+
 		req, err := http.NewRequest("GET", f.url, nil)
 		if err != nil {
 			return nil, err
 		}
-
 		req.Header.Set("User-Agent", UserAgent)
-		rangeHeader := fmt.Sprintf("bytes=%d-%d", offset, endPos)
+		rangeHeader := fmt.Sprintf("bytes=%d-%d", offset, fetchEnd)
 		req.Header.Set("Range", rangeHeader)
 
 		resp, err := f.client.Do(req)
@@ -326,54 +381,53 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 			return nil, err
 		}
 
-		func() {
-			defer resp.Body.Close()
-
-			if resp.StatusCode >= 500 && resp.StatusCode < 600 {
-				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
-				return
+		if resp.StatusCode >= 500 && resp.StatusCode < 600 {
+			lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
+			resp.Body.Close()
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+				continue
 			}
+			return nil, lastErr
+		}
 
-			if resp.StatusCode != 206 {
-				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
-				return
+		if resp.StatusCode != 206 {
+			lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
+			resp.Body.Close()
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+				continue
 			}
+			return nil, lastErr
+		}
 
-			data := make([]byte, expectedSize)
-			n, err := io.ReadFull(resp.Body, data)
-			if err != nil {
-				if err == io.ErrUnexpectedEOF {
-					// Treat unexpected EOF as retryable
-					lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteReadUnexpectedEOF, rangeHeader, n, expectedSize)
-					return
-				}
-				lastErr = err
-				return
-			}
-
-			lastErr = nil
-		}()
-
-		if lastErr == nil {
-			req2, err := http.NewRequest("GET", f.url, nil)
-			if err != nil {
-				return nil, err
-			}
-			req2.Header.Set("User-Agent", UserAgent)
-			req2.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, endPos))
-			resp2, err := f.client.Do(req2)
-			if err != nil {
-				lastErr = err
+		// Read fetched body
+		fetchedLen := fetchEnd - offset + 1
+		fetchedData := make([]byte, fetchedLen)
+		n, err := io.ReadFull(resp.Body, fetchedData)
+		resp.Body.Close()
+		if err != nil {
+			if err == io.ErrUnexpectedEOF {
+				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteReadUnexpectedEOF, rangeHeader, n, fetchedLen)
 				if attempt < maxRetries {
 					time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
 					continue
 				}
-				return nil, err
+				return nil, lastErr
 			}
-			defer resp2.Body.Close()
+			lastErr = err
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+				continue
+			}
+			return nil, err
+		}
 
-			if resp2.StatusCode != 206 {
-				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp2.StatusCode)
+		// If caching enabled, store fetchedData into cache
+		if HTTPReadCacheSize > 0 {
+			// Ensure we fetched at least the requested bytes
+			if int64(len(fetchedData)) < expectedSize {
+				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteReadUnexpectedEOF, rangeHeader, n, fetchedLen)
 				if attempt < maxRetries {
 					time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
 					continue
@@ -381,24 +435,30 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 				return nil, lastErr
 			}
 
-			data := make([]byte, expectedSize)
-			n, err := io.ReadFull(resp2.Body, data)
-			if err != nil {
-				lastErr = err
-				if attempt < maxRetries {
-					time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
-					continue
-				}
-				return nil, err
-			}
-
-			return data[:n], nil
+			f.cacheMu.Lock()
+			// store full fetchedData as cache (simple policy)
+			f.cache = make([]byte, len(fetchedData))
+			copy(f.cache, fetchedData)
+			f.cacheStart = offset
+			f.cacheEnd = offset + int64(len(fetchedData)) - 1
+			f.cacheMu.Unlock()
+			// return requested slice directly from fetchedData to avoid any cache races
+			data := make([]byte, int(expectedSize))
+			copy(data, fetchedData[0:int(expectedSize)])
+			return data, nil
 		}
 
+		if int64(len(fetchedData)) >= expectedSize {
+			return fetchedData[:expectedSize], nil
+		}
+
+		// Shouldn't normally reach here; treat as error
+		lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPReadFailedAfterRetries)
 		if attempt < maxRetries {
 			time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
 			continue
 		}
+		return nil, lastErr
 	}
 
 	if lastErr != nil {

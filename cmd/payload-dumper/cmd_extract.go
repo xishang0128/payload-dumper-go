@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +20,12 @@ import (
 )
 
 var (
-	extractOut         string
-	extractPartitions  string
-	extractWorkers     int
-	extractUseBuffer   bool
-	extractHTTPWorkers int
+	extractOut           string
+	extractPartitions    string
+	extractWorkers       int
+	extractUseBuffer     bool
+	extractHTTPWorkers   int
+	extractHTTPCacheSize string
 )
 
 func initExtractCmd() {
@@ -40,6 +42,7 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
 	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
+	extractCmd.Flags().StringVar(&extractHTTPCacheSize, "http-cache-size", "", i18n.I18nMsg.Extract.FlagHTTPCacheSize)
 	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
 
 	rootCmd.AddCommand(extractCmd)
@@ -72,6 +75,13 @@ func runExtract(cmd *cobra.Command, args []string) {
 	file.SetHTTPClientTimeout(300 * time.Second)
 	// Apply HTTP concurrent request limit if provided (0 = unlimited)
 	file.SetHTTPMaxConcurrentRequests(extractHTTPWorkers)
+	if extractHTTPCacheSize != "" {
+		if v, err := parseSizeString(extractHTTPCacheSize); err == nil {
+			file.SetHTTPReadCacheSize(v)
+		} else {
+			log.Fatalf(i18n.I18nMsg.Extract.ErrorInvalidHTTPCacheSize, err)
+		}
+	}
 	// Create dumper
 	d, err := createDumper(payloadFile)
 	if err != nil {
@@ -201,4 +211,42 @@ func createDumper(p string) (*dumper.Dumper, error) {
 	}
 
 	return dumper.New(reader)
+}
+
+// parseSizeString parses a human-friendly size string like "4M", "256K", "1G" into bytes.
+// Supports suffixes: K, M, G (case-insensitive). No suffix or empty string returns 0.
+func parseSizeString(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+
+	last := s[len(s)-1]
+	multiplier := int64(1)
+	numStr := s
+
+	switch last {
+	case 'K', 'k':
+		multiplier = 1 << 10
+		numStr = s[:len(s)-1]
+	case 'M', 'm':
+		multiplier = 1 << 20
+		numStr = s[:len(s)-1]
+	case 'G', 'g':
+		multiplier = 1 << 30
+		numStr = s[:len(s)-1]
+	}
+
+	numStr = strings.TrimSpace(numStr)
+	if numStr == "" {
+		return 0, fmt.Errorf("invalid size")
+	}
+
+	v, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	bytes := int64(v * float64(multiplier))
+	return bytes, nil
 }
