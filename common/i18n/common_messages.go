@@ -22,6 +22,10 @@ type CommonMessages struct {
 	HTTPInvalidContentLength       string
 	HTTPRemoteDidNotReturnPartial  string
 
+	// Read-related errors
+	HTTPRemoteReadUnexpectedEOF string
+	HTTPReadFailedAfterRetries  string
+
 	// Common flag descriptions
 	FlagOut       string
 	FlagJSON      string
@@ -50,6 +54,10 @@ var EnglishCommonMessages = CommonMessages{
 	HTTPInvalidContentLength:       "invalid content length: %v",
 	HTTPRemoteDidNotReturnPartial:  "remote did not return partial content: %d",
 
+	// Read-related errors
+	HTTPRemoteReadUnexpectedEOF: "unexpected EOF while reading range %s: read %d/%d bytes",
+	HTTPReadFailedAfterRetries:  "failed to read range after retries",
+
 	FlagOut:       "output directory",
 	FlagJSON:      "output as JSON",
 	FlagSave:      "save to file",
@@ -76,6 +84,10 @@ var ChineseCommonMessages = CommonMessages{
 	HTTPRemoteHasNoLength:          "远程服务器未提供内容长度",
 	HTTPInvalidContentLength:       "无效的内容长度: %v",
 	HTTPRemoteDidNotReturnPartial:  "远程服务器未返回部分内容：%d",
+
+	// Read-related errors
+	HTTPRemoteReadUnexpectedEOF: "读取范围时出现意外 EOF：%s，已读取 %d/%d 字节",
+	HTTPReadFailedAfterRetries:  "多次重试后读取范围失败",
 
 	FlagOut:       "输出目录",
 	FlagJSON:      "以 JSON 格式输出",

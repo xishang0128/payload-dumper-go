@@ -15,10 +15,11 @@ import (
 )
 
 var (
-	extractOut        string
-	extractPartitions string
-	extractWorkers    int
-	extractUseBuffer  bool
+	extractOut         string
+	extractPartitions  string
+	extractWorkers     int
+	extractUseBuffer   bool
+	extractHTTPWorkers int
 )
 
 func initExtractCmd() {
@@ -34,6 +35,7 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
+	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
 	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
 
 	rootCmd.AddCommand(extractCmd)
@@ -45,43 +47,31 @@ func runExtract(cmd *cobra.Command, args []string) {
 		elapsed := time.Since(start)
 		fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
 	}()
-
 	payloadFile := args[0]
 
-	// Create file reader
-	var reader file.Reader
-	var err error
-
-	if strings.HasPrefix(payloadFile, "http://") || strings.HasPrefix(payloadFile, "https://") {
-		reader, err = file.NewHTTPFile(payloadFile)
-	} else {
-		reader, err = file.NewLocalFile(payloadFile)
-	}
-
-	if err != nil {
-		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToOpen, err)
-	}
-	defer reader.Close()
-
-	// Create dumper
-	d, err := dumper.New(reader)
-	if err != nil {
-		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
-	}
-
-	// Parse partition names
-	var partitionNames []string
+	var (
+		partitionNames []string
+		err            error
+	)
 	if extractPartitions != "" {
 		partitionNames = strings.Split(extractPartitions, ",")
 		for i, name := range partitionNames {
 			partitionNames[i] = strings.TrimSpace(name)
 		}
 	} else {
-		// Interactive partition selection when no partitions specified
-		partitionNames, err = selectPartitionsInteractively(d)
+		partitionNames, err = selectPartitionsInteractively(payloadFile)
 		if err != nil {
 			log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
 		}
+	}
+
+	file.SetHTTPClientTimeout(300 * time.Second)
+	// Apply HTTP concurrent request limit if provided (0 = unlimited)
+	file.SetHTTPMaxConcurrentRequests(extractHTTPWorkers)
+	// Create dumper
+	d, err := createDumper(payloadFile)
+	if err != nil {
+		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
 
 	// Extract partitions
@@ -93,7 +83,11 @@ func runExtract(cmd *cobra.Command, args []string) {
 }
 
 // selectPartitionsInteractively shows an interactive partition selector using survey
-func selectPartitionsInteractively(d *dumper.Dumper) ([]string, error) {
+func selectPartitionsInteractively(p string) ([]string, error) {
+	d, err := createDumper(p)
+	if err != nil {
+		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
+	}
 	partitions, err := d.ListPartitions()
 	if err != nil {
 		return nil, fmt.Errorf(i18n.I18nMsg.Extract.FailedToListPartitions, err)
@@ -139,4 +133,23 @@ func selectPartitionsInteractively(d *dumper.Dumper) ([]string, error) {
 	}
 
 	return selectedPartitions, nil
+}
+
+func createDumper(p string) (*dumper.Dumper, error) {
+	var (
+		reader file.Reader
+		err    error
+	)
+	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+		reader, err = file.NewHTTPFile(p)
+	} else {
+		reader, err = file.NewLocalFile(p)
+	}
+
+	if err != nil {
+		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToOpen, err)
+	}
+	defer reader.Close()
+
+	return dumper.New(reader)
 }

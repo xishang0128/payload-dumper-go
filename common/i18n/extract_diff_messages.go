@@ -27,10 +27,10 @@ var EnglishExtractDiffMessages = ExtractDiffMessages{
 // Chinese extract-diff messages
 var ChineseExtractDiffMessages = ExtractDiffMessages{
 	Use:   "extract-diff [payload 文件链接/路径]",
-	Short: "从差分OTA payload中提取分区",
-	Long:  `使用基础镜像从差分OTA payload文件中提取分区。`,
+	Short: "从差分 OTA payload 中提取分区",
+	Long:  `使用基础镜像从差分 OTA payload 文件中提取分区。`,
 
-	FlagOld: "包含原始镜像的目录，用于差分OTA",
+	FlagOld: "包含原始镜像的目录，用于差分 OTA",
 
 	ErrorFailedToExtractDiff: "无法提取差分分区: %v",
 	DiffExtractionCompleted:  "差分提取完成！",

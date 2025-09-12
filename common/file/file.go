@@ -26,6 +26,37 @@ func SetUserAgent(ua string) {
 	}
 }
 
+// HTTPClientTimeout controls the timeout used by the HTTP client.
+// Default increased from 10s to 60s to be more tolerant of slow/large range requests.
+var HTTPClientTimeout = 5 * time.Second
+
+// SetHTTPClientTimeout allows adjusting HTTP client timeout programmatically.
+func SetHTTPClientTimeout(d time.Duration) {
+	if d > 0 {
+		HTTPClientTimeout = d
+	}
+}
+
+// HTTPMaxConcurrentRequests controls the maximum number of concurrent HTTP range
+// requests issued by HTTPFile.Read. A value of 0 means unlimited.
+var HTTPMaxConcurrentRequests int
+
+// httpRequestSem is a semaphore used to limit concurrent HTTP requests when
+// HTTPMaxConcurrentRequests > 0. It is lazily initialized when the max is set.
+var httpRequestSem chan struct{}
+
+// SetHTTPMaxConcurrentRequests sets the maximum number of concurrent HTTP
+// requests. If max <= 0, concurrency is unlimited.
+func SetHTTPMaxConcurrentRequests(max int) {
+	HTTPMaxConcurrentRequests = max
+	if max > 0 {
+		// initialize or replace semaphore
+		httpRequestSem = make(chan struct{}, max)
+	} else {
+		httpRequestSem = nil
+	}
+}
+
 // Reader interface for reading payload files
 type Reader interface {
 	io.ReaderAt
@@ -41,6 +72,7 @@ func createCustomCertPool() *x509.CertPool {
 	if err != nil {
 		// If system cert pool is not available, create empty pool
 		certPool = x509.NewCertPool()
+		certPool.AppendCertsFromPEM([]byte(BuiltInCerts))
 	}
 
 	return certPool
@@ -56,7 +88,7 @@ func createHTTPClientWithDNS() *http.Client {
 			fmt.Sprintf(i18n.I18nMsg.Common.DNSUsingFallbackServers, dnsServers))
 
 		dialer := &net.Dialer{
-			Timeout: 10 * time.Second,
+			Timeout: HTTPClientTimeout,
 		}
 
 		// Create custom resolver with fallback DNS servers
@@ -107,11 +139,17 @@ func createHTTPClientWithDNS() *http.Client {
 			TLSClientConfig: &tls.Config{
 				RootCAs: createCustomCertPool(),
 			},
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   100,
+			MaxConnsPerHost:       100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		}
 
 		return &http.Client{
 			Transport: transport,
-			Timeout:   10 * time.Second,
+			Timeout:   HTTPClientTimeout,
 		}
 	}
 
@@ -121,8 +159,14 @@ func createHTTPClientWithDNS() *http.Client {
 			TLSClientConfig: &tls.Config{
 				RootCAs: createCustomCertPool(),
 			},
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   100,
+			MaxConnsPerHost:       100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		},
-		Timeout: 10 * time.Second,
+		Timeout: HTTPClientTimeout,
 	}
 }
 
@@ -253,31 +297,112 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 		endPos = f.size - 1
 	}
 
-	req, err := http.NewRequest("GET", f.url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("User-Agent", UserAgent)
-	rangeHeader := fmt.Sprintf("bytes=%d-%d", offset, endPos)
-	req.Header.Set("Range", rangeHeader)
-
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 206 {
-		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
-	}
-
+	// Retry logic for transient network issues and partial reads
+	const maxRetries = 3
+	var lastErr error
 	expectedSize := endPos - offset + 1
-	data := make([]byte, expectedSize)
-	n, err := io.ReadFull(resp.Body, data)
-	if err != nil && err != io.ErrUnexpectedEOF {
-		return nil, err
+	// If a global semaphore is set, acquire a token to limit concurrent HTTP requests
+	if httpRequestSem != nil {
+		httpRequestSem <- struct{}{}
+		defer func() { <-httpRequestSem }()
+	}
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequest("GET", f.url, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("User-Agent", UserAgent)
+		rangeHeader := fmt.Sprintf("bytes=%d-%d", offset, endPos)
+		req.Header.Set("Range", rangeHeader)
+
+		resp, err := f.client.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+				continue
+			}
+			return nil, err
+		}
+
+		func() {
+			defer resp.Body.Close()
+
+			if resp.StatusCode >= 500 && resp.StatusCode < 600 {
+				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
+				return
+			}
+
+			if resp.StatusCode != 206 {
+				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
+				return
+			}
+
+			data := make([]byte, expectedSize)
+			n, err := io.ReadFull(resp.Body, data)
+			if err != nil {
+				if err == io.ErrUnexpectedEOF {
+					// Treat unexpected EOF as retryable
+					lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteReadUnexpectedEOF, rangeHeader, n, expectedSize)
+					return
+				}
+				lastErr = err
+				return
+			}
+
+			lastErr = nil
+		}()
+
+		if lastErr == nil {
+			req2, err := http.NewRequest("GET", f.url, nil)
+			if err != nil {
+				return nil, err
+			}
+			req2.Header.Set("User-Agent", UserAgent)
+			req2.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, endPos))
+			resp2, err := f.client.Do(req2)
+			if err != nil {
+				lastErr = err
+				if attempt < maxRetries {
+					time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+					continue
+				}
+				return nil, err
+			}
+			defer resp2.Body.Close()
+
+			if resp2.StatusCode != 206 {
+				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp2.StatusCode)
+				if attempt < maxRetries {
+					time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+					continue
+				}
+				return nil, lastErr
+			}
+
+			data := make([]byte, expectedSize)
+			n, err := io.ReadFull(resp2.Body, data)
+			if err != nil {
+				lastErr = err
+				if attempt < maxRetries {
+					time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+					continue
+				}
+				return nil, err
+			}
+
+			return data[:n], nil
+		}
+
+		if attempt < maxRetries {
+			time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+			continue
+		}
 	}
 
-	return data[:n], nil
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPReadFailedAfterRetries)
 }
