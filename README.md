@@ -19,6 +19,11 @@ go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@latest
 
 Or download prebuilt binaries from the Releases page: https://github.com/xishang0128/payload-dumper-go/releases
 
+#### Usage on Android
+
+For Termux, a non-CGO binary is required (which may be slower), or use a CGO-static compiled binary via adb shell.
+
+
 ### Go library
 ```bash
 go get github.com/xishang0128/payload-dumper-go

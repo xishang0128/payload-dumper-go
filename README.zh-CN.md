@@ -17,6 +17,10 @@ go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@latest
 
 或者下载预编译的二进制文件：[Releases](https://github.com/xishang0128/payload-dumper-go/releases)
 
+#### 安卓上的使用
+
+termux 需要非 CGO 的二进制（会比较慢），或者 adb shell 使用 cgo-static 编译的二进制。
+
 ### Go 库
 ```bash
 go get github.com/xishang0128/payload-dumper-go
