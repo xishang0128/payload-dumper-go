@@ -112,6 +112,11 @@ jobs:
             goarch: arm64
             cgo: false
             output: payload-dumper-linux-arm64
+          - os: ubuntu-latest
+            goos: android
+            goarch: arm64
+            cgo: false
+            output: payload-dumper-android-arm64
 
     steps:
       - name: Checkout
@@ -127,7 +132,7 @@ jobs:
           go-version: '1.25'
 
       - name: Install Linux dependencies for CGO
-        if: (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') && matrix.cgo == true
+        if: matrix.goos == 'linux' && matrix.cgo == true
         run: |
           sudo apt-get update
           sudo apt-get install -y liblzma-dev pkg-config
@@ -137,7 +142,7 @@ jobs:
           fi
 
       - name: Build CGO version (Linux)
-        if: matrix.cgo == true && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm')
+        if: matrix.cgo == true && matrix.goos == 'linux'
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -157,7 +162,7 @@ jobs:
           fi
 
       - name: Build CGO version (Darwin)
-        if: (matrix.os == 'macos-latest' || matrix.os == 'macos-13') && matrix.cgo == true
+        if: matrix.goos == 'darwin' && matrix.cgo == true
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
