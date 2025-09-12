@@ -3,7 +3,11 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +30,10 @@ var (
 	extractUseBuffer     bool
 	extractHTTPWorkers   int
 	extractHTTPCacheSize string
+	// New flags for profiling and memory tuning
+	extractPprofAddr   string
+	extractHeapProfile string
+	extractMaxBufferMB int
 )
 
 func initExtractCmd() {
@@ -44,6 +52,9 @@ func initExtractCmd() {
 	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
 	extractCmd.Flags().StringVar(&extractHTTPCacheSize, "http-cache-size", "", i18n.I18nMsg.Extract.FlagHTTPCacheSize)
 	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
+	extractCmd.Flags().StringVar(&extractPprofAddr, "pprof-addr", "", i18n.I18nMsg.Extract.FlagPprofAddr)
+	extractCmd.Flags().StringVar(&extractHeapProfile, "heap-profile", "", i18n.I18nMsg.Extract.FlagHeapProfile)
+	extractCmd.Flags().IntVar(&extractMaxBufferMB, "max-buffer-mb", 64, i18n.I18nMsg.Extract.FlagMaxBufferMB)
 
 	rootCmd.AddCommand(extractCmd)
 }
@@ -55,6 +66,26 @@ func runExtract(cmd *cobra.Command, args []string) {
 		fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
 	}()
 	payloadFile := args[0]
+
+	// Apply MaxBufferSize from flag (convert MB to bytes)
+	if extractMaxBufferMB <= 0 {
+		extractMaxBufferMB = 64
+	}
+	// set dumper MaxBufferSize (int bytes)
+	dumper.MaxBufferSize = int64(extractMaxBufferMB) * 1024 * 1024
+
+	// Start pprof server if requested
+	var pprofServer *http.Server
+	if extractPprofAddr != "" {
+		pprofServer = &http.Server{Addr: extractPprofAddr}
+		go func() {
+			// _ = http.ListenAndServe(extractPprofAddr, nil) // pprof already registered by import
+			if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("pprof server error: %v", err)
+			}
+		}()
+		log.Printf("pprof server started at %s", extractPprofAddr)
+	}
 
 	var (
 		partitionNames []string
@@ -133,6 +164,26 @@ func runExtract(cmd *cobra.Command, args []string) {
 	}
 
 	progress.Wait()
+
+	// Optionally write heap profile after extraction
+	if extractHeapProfile != "" {
+		f, err := os.Create(extractHeapProfile)
+		if err != nil {
+			log.Printf("failed to create heap profile file: %v", err)
+		} else {
+			runtime.GC() // get up-to-date statistics
+			if err := pprof.WriteHeapProfile(f); err != nil {
+				log.Printf("failed to write heap profile: %v", err)
+			}
+			f.Close()
+			log.Printf("heap profile written to %s", extractHeapProfile)
+		}
+	}
+
+	// Shutdown pprof server if it was started
+	if pprofServer != nil {
+		_ = pprofServer.Close()
+	}
 
 	fmt.Println(i18n.I18nMsg.Extract.ExtractionCompleted)
 }

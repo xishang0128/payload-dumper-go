@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	// progress rendering moved to cmd layer to avoid IO blocking in dumper goroutines
 	"github.com/xishang0128/payload-dumper-go/common/file"
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 	"github.com/xishang0128/payload-dumper-go/common/metadata"
@@ -35,6 +34,10 @@ type Dumper struct {
 	manifest    *metadata.DeltaArchiveManifest
 	blockSize   uint32
 }
+
+// MaxBufferSize controls the maximum temporary buffer size used while processing operations.
+// Value is in bytes. Default set internally but can be overridden by callers (e.g., cmd layer).
+var MaxBufferSize int64 = 64 * 1024 * 1024 // 64 MB
 
 // Close releases underlying resources held by the Dumper (e.g. the payload reader).
 func (d *Dumper) Close() error {
@@ -266,10 +269,9 @@ func (d *Dumper) extractSinglePartitionToBytesOptimized(partition *metadata.Part
 		})
 	}
 
-	const maxBufferSize = 64 * 1024 * 1024 // 64MB
 	bufferPool := make(chan []byte, runtime.NumCPU())
 	for i := 0; i < runtime.NumCPU(); i++ {
-		bufferPool <- make([]byte, 0, maxBufferSize)
+		bufferPool <- nil
 	}
 
 	type workItem struct {
@@ -718,10 +720,10 @@ func formatSize(bytes uint64) string {
 }
 
 func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, progressCallback ProgressCallback) error {
-	const maxBufferSize = 64 * 1024 * 1024 // 64MB
+	// Use nil placeholders to avoid preallocating large buffers. Allocate on demand in workers.
 	bufferPool := make(chan []byte, runtime.NumCPU())
 	for i := 0; i < runtime.NumCPU(); i++ {
-		bufferPool <- make([]byte, 0, maxBufferSize)
+		bufferPool <- nil
 	}
 
 	type workItem struct {
@@ -797,15 +799,26 @@ func (d *Dumper) processOperationOptimized(op Operation, outFile *os.File, oldFi
 	if op.Length > 0 {
 		buffer := <-bufferPool
 		defer func() {
+			if buffer == nil {
+				bufferPool <- nil
+				return
+			}
 			buffer = buffer[:0]
 			bufferPool <- buffer
 		}()
 
-		if cap(buffer) < int(op.Length) {
-			buffer = make([]byte, op.Length)
-		} else {
-			buffer = buffer[:op.Length]
+		need := int(op.Length)
+		if buffer == nil || cap(buffer) < need {
+			alloc := max(need, 64*1024)
+			if int64(alloc) > MaxBufferSize {
+				alloc = int(MaxBufferSize)
+			}
+			if alloc < need {
+				alloc = need
+			}
+			buffer = make([]byte, alloc)
 		}
+		buffer = buffer[:need]
 
 		data, err = d.payloadFile.Read(op.Offset, int(op.Length))
 		if err != nil {
@@ -1032,15 +1045,26 @@ func (d *Dumper) processOperationToBytesOptimized(op Operation, buffer []byte, b
 	if op.Length > 0 {
 		workBuffer := <-bufferPool
 		defer func() {
+			if workBuffer == nil {
+				bufferPool <- nil
+				return
+			}
 			workBuffer = workBuffer[:0]
 			bufferPool <- workBuffer
 		}()
 
-		if cap(workBuffer) < int(op.Length) {
-			workBuffer = make([]byte, op.Length)
-		} else {
-			workBuffer = workBuffer[:op.Length]
+		need := int(op.Length)
+		if workBuffer == nil || cap(workBuffer) < need {
+			alloc := max(need, 64*1024)
+			if int64(alloc) > MaxBufferSize {
+				alloc = int(MaxBufferSize)
+			}
+			if alloc < need {
+				alloc = need
+			}
+			workBuffer = make([]byte, alloc)
 		}
+		workBuffer = workBuffer[:need]
 
 		data, err = d.payloadFile.Read(op.Offset, int(op.Length))
 		if err != nil {

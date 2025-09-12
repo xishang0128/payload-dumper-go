@@ -11,6 +11,9 @@ type ExtractMessages struct {
 	FlagHTTPWorkers           string
 	FlagHTTPCacheSize         string
 	ErrorInvalidHTTPCacheSize string
+	FlagPprofAddr             string
+	FlagHeapProfile           string
+	FlagMaxBufferMB           string
 
 	ErrorFailedToExtract string
 	ExtractionCompleted  string
@@ -47,6 +50,9 @@ var EnglishExtractMessages = ExtractMessages{
 	FlagHTTPWorkers:           "max concurrent HTTP range requests (0 = unlimited)",
 	FlagHTTPCacheSize:         "size of HTTP read cache (supports suffix K/M/G, e.g. 4M; 0 = default 1 MiB)",
 	ErrorInvalidHTTPCacheSize: "invalid http-cache-size: %v",
+	FlagPprofAddr:             "address to start pprof HTTP server (e.g. localhost:6060)",
+	FlagHeapProfile:           "write heap profile to file after extraction",
+	FlagMaxBufferMB:           "maximum per-worker buffer size in MB (default 64)",
 
 	ErrorFailedToExtract: "Failed to extract partitions: %v",
 	ExtractionCompleted:  "Extraction completed successfully!",
@@ -83,6 +89,9 @@ var ChineseExtractMessages = ExtractMessages{
 	FlagHTTPWorkers:           "最大并发 HTTP Range 请求数 (0 = 不限制)",
 	FlagHTTPCacheSize:         "HTTP 读取缓存大小，支持后缀 K/M/G，例如 4M；0 = 默认 1 MiB",
 	ErrorInvalidHTTPCacheSize: "无效的 http-cache-size: %v",
+	FlagPprofAddr:             "启动 pprof HTTP 服务的地址（例如 localhost:6060）",
+	FlagHeapProfile:           "在提取完成后将 heap profile 写入到文件",
+	FlagMaxBufferMB:           "每个 worker 可使用的最大缓冲区大小（MB）（默认 64）",
 
 	ErrorFailedToExtract: "无法提取分区: %v",
 	ExtractionCompleted:  "提取完成！",
