@@ -84,7 +84,7 @@ var EnglishDumperMessages = DumperMessages{
 var ChineseDumperMessages = DumperMessages{
 	// Error messages
 	ErrorInvalidMagic:              "无效的文件标识: %s",
-	ErrorUnsupportedFileFormat:     "不支持的文件格式版本: %d",
+	ErrorUnsupportedFileFormat:     "不支持的文件格式版本：%d",
 	ErrorInsufficientDataForHeader: "文件头数据不足",
 	ErrorFailedToParseManifest:     "解析清单文件失败: %v",
 	ErrorFailedToCreateOutputFile:  "创建输出文件失败: %v",
@@ -93,7 +93,7 @@ var ChineseDumperMessages = DumperMessages{
 	ErrorFailedToDecompressBzip2:   "解压bzip2数据失败: %v",
 	ErrorFailedToCreateXZReader:    "创建xz读取器失败: %v",
 	ErrorFailedToDecompressXZ:      "解压xz数据失败: %v",
-	ErrorSourceCopyOnlyForDiff:     "SOURCE_COPY操作仅支持差分OTA",
+	ErrorSourceCopyOnlyForDiff:     "SOURCE_COPY 操作仅支持差分 OTA",
 	ErrorUnsupportedOperationType:  "不支持的操作类型: %v",
 	ErrorFailedToWriteToFile:       "写入文件失败: %v",
 	ErrorFailedToReadFromOldFile:   "从旧文件读取失败: %v",

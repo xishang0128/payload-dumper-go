@@ -69,8 +69,8 @@ var EnglishExtractMessages = ExtractMessages{
 // Chinese extract messages
 var ChineseExtractMessages = ExtractMessages{
 	Use:   "extract [payload 文件链接/路径]",
-	Short: "从payload文件中提取分区",
-	Long:  `从Android OTA payload文件中提取全部或指定的分区。`,
+	Short: "从 payload 文件中提取分区",
+	Long:  `从 Android OTA payload 文件中提取全部或指定的分区。`,
 
 	FlagPartitions: "要提取的分区列表，用逗号分隔",
 	FlagWorkers:    "工作线程数",
@@ -92,7 +92,7 @@ var ChineseExtractMessages = ExtractMessages{
 	ConfirmSelection:         "已选择分区：%s。是否继续？(y/N)：",
 	InvalidSelection:         "无效选择：%s",
 	NoPartitionsSelected:     "未选择任何分区进行提取。",
-	InteractiveSelection:     "请选择要提取的分区 (空格键选择/取消选择，回车确认，<右键>全选，<左键>全不选, 输入文本筛选):",
+	InteractiveSelection:     "请选择要提取的分区 (空格键选择/取消选择，回车确认，<右键>全选，<左键>全不选，输入文本筛选):",
 	FailedToSelectPartitions: "无法选择分区: %v",
 	FailedToListPartitions:   "无法列出分区: %v",
 	NoPartitionsFound:        "未找到分区",

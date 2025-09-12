@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	listOut  string
-	listJson bool
-	listSave bool
+	listOut        string
+	listPartitions string
+	listJson       bool
+	listSave       bool
 )
 
 func initListCmd() {
@@ -32,6 +33,7 @@ func initListCmd() {
 	}
 
 	listCmd.Flags().StringVarP(&listOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
+	listCmd.Flags().StringVarP(&listPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	listCmd.Flags().BoolVarP(&listJson, "json", "j", false, i18n.I18nMsg.Common.FlagJSON)
 	listCmd.Flags().BoolVarP(&listSave, "save", "s", false, i18n.I18nMsg.List.FlagSavePartitions)
 
@@ -42,7 +44,9 @@ func runList(cmd *cobra.Command, args []string) {
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
+		if !listJson {
+			fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
+		}
 	}()
 
 	payloadFile := args[0]
@@ -69,9 +73,21 @@ func runList(cmd *cobra.Command, args []string) {
 	}
 
 	// Get partition info
-	partitionsInfo, err := d.ListPartitions()
+	partitionsInfo, err := d.ListPartitionsAsMap()
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.List.ErrorFailedToList, err)
+	}
+
+	if listPartitions != "" {
+		requested := strings.Split(listPartitions, ",")
+		pi := make(map[string]dumper.PartitionInfo)
+
+		for _, name := range requested {
+			if info, ok := partitionsInfo[name]; ok {
+				pi[name] = info
+			}
+		}
+		partitionsInfo = pi
 	}
 
 	// Output results

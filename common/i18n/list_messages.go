@@ -29,8 +29,8 @@ var EnglishListMessages = ListMessages{
 // Chinese list messages
 var ChineseListMessages = ListMessages{
 	Use:   "list [payload 文件链接/路径]",
-	Short: "列出payload文件中的分区",
-	Long:  `列出Android OTA payload文件中的所有可用分区。`,
+	Short: "列出 payload 文件中的分区",
+	Long:  `列出 Android OTA payload 文件中的所有可用分区。`,
 
 	ErrorFailedToList:  "无法列出分区: %v",
 	TotalPartitions:    "共 %d 个分区",

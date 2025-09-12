@@ -40,10 +40,10 @@ list available partitions, and extract metadata.`,
 
 // Chinese app messages
 var ChineseAppMessages = AppMessages{
-	AppDescription: "Android OTA payload提取工具",
-	AppLongDescription: `用于提取Android OTA payload文件的工具。
+	AppDescription: "Android OTA payload 提取工具",
+	AppLongDescription: `用于提取 Android OTA payload 文件的工具。
 
-此工具可以从payload.bin文件中提取分区、
+此工具可以从 payload.bin 文件中提取分区、
 列出可用分区并提取元数据。`,
 
 	VersionTitle:           "payload-dumper-go",

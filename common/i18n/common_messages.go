@@ -75,12 +75,12 @@ var ChineseCommonMessages = CommonMessages{
 	HTTPRemoteDoesNotSupportRanges: "远程服务器不支持范围请求",
 	HTTPRemoteHasNoLength:          "远程服务器未提供内容长度",
 	HTTPInvalidContentLength:       "无效的内容长度: %v",
-	HTTPRemoteDidNotReturnPartial:  "远程服务器未返回部分内容: %d",
+	HTTPRemoteDidNotReturnPartial:  "远程服务器未返回部分内容：%d",
 
 	FlagOut:       "输出目录",
-	FlagJSON:      "以JSON格式输出",
+	FlagJSON:      "以 JSON 格式输出",
 	FlagSave:      "保存到文件",
-	FlagUserAgent: "设置HTTP请求的User-Agent",
+	FlagUserAgent: "设置 HTTP 请求的 User-Agent",
 	ElapsedTime:   "耗时: %s",
 	FlagBuffer:    "使用内存缓冲（将整个分区加载到内存后再写入，提供更好的错误处理但占用更多内存）",
 }
