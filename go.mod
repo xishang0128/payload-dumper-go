@@ -10,10 +10,12 @@ require (
 	github.com/vbauerster/mpb/v8 v8.10.2
 )
 
-require github.com/spencercw/go-xz v0.0.0-20181128201811-c82a2123b492
+require (
+	github.com/AlecAivazis/survey/v2 v2.3.7
+	github.com/spencercw/go-xz v0.0.0-20181128201811-c82a2123b492
+)
 
 require (
-	github.com/AlecAivazis/survey/v2 v2.3.7 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

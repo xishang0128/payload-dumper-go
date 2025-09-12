@@ -7,8 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
+	"github.com/vbauerster/mpb/v8"
+	"github.com/vbauerster/mpb/v8/decor"
 	"github.com/xishang0128/payload-dumper-go/common/file"
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 	"github.com/xishang0128/payload-dumper-go/dumper"
@@ -79,10 +83,46 @@ func runExtract(cmd *cobra.Command, args []string) {
 		}
 	}()
 
-	// Extract partitions
-	if err := d.ExtractPartitionsWithOptions(extractOut, partitionNames, extractWorkers, extractUseBuffer); err != nil {
+	// Extract partitions with progress rendered in cmd layer
+	progress := mpb.New(mpb.WithWidth(60))
+	bars := make(map[string]*mpb.Bar)
+	var barsMu sync.Mutex
+
+	progressCallback := func(pi dumper.ProgressInfo) {
+		barsMu.Lock()
+		defer barsMu.Unlock()
+		// create bar if not exists
+		if _, ok := bars[pi.PartitionName]; !ok {
+			partitionDesc := fmt.Sprintf("[%s](%s)", pi.PartitionName, pi.SizeReadable)
+			bar := progress.AddBar(int64(pi.TotalOperations),
+				mpb.PrependDecorators(
+					decor.Name(partitionDesc, decor.WCSyncSpaceR),
+				),
+				mpb.AppendDecorators(
+					decor.Percentage(decor.WC{W: 5}),
+					decor.Counters(0, " | %d/%d"),
+					decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 6}, decor.WCSyncSpace),
+					decor.AverageSpeed(0, fmt.Sprintf(" | %%.2f %s", i18n.I18nMsg.Dumper.OpsSuffix)),
+				),
+			)
+			bars[pi.PartitionName] = bar
+		}
+		bar := bars[pi.PartitionName]
+		// set bar current
+		cur := int64(pi.CompletedOps)
+		if cur > 0 {
+			delta := cur - bar.Current()
+			if delta > 0 {
+				bar.IncrBy(int(delta))
+			}
+		}
+	}
+
+	if err := d.ExtractPartitionsWithOptionsAndProgress(extractOut, partitionNames, extractWorkers, extractUseBuffer, progressCallback); err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.ErrorFailedToExtract, err)
 	}
+
+	progress.Wait()
 
 	fmt.Println(i18n.I18nMsg.Extract.ExtractionCompleted)
 }

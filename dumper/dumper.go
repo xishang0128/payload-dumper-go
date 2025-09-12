@@ -13,8 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vbauerster/mpb/v8"
-	"github.com/vbauerster/mpb/v8/decor"
+	// progress rendering moved to cmd layer to avoid IO blocking in dumper goroutines
 	"github.com/xishang0128/payload-dumper-go/common/file"
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 	"github.com/xishang0128/payload-dumper-go/common/metadata"
@@ -62,6 +61,7 @@ type ProgressInfo struct {
 	ProgressPercent  float64 `json:"progress_percent"`
 	OperationsPerSec float64 `json:"operations_per_sec"`
 	EstimatedTime    string  `json:"estimated_time"`
+	SizeReadable     string  `json:"size_readable"`
 }
 
 // ProgressCallback is a function type for receiving progress updates
@@ -191,34 +191,7 @@ func (d *Dumper) ExtractPartitionsWithOptionsAndProgress(outputDir string, parti
 
 // extractPartitionsViaMemory extracts partitions using memory buffers with progress reporting
 func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpdate, outputDir string, progressCallback ProgressCallback) error {
-	progress := mpb.New()
-
-	bars := make(map[string]*mpb.Bar)
-	for _, partition := range partitions {
-		partitionName := partition.GetPartitionName()
-		var sizeInBlocks uint64
-		for _, operation := range partition.GetOperations() {
-			for _, extent := range operation.GetDstExtents() {
-				sizeInBlocks += extent.GetNumBlocks()
-			}
-		}
-		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-		sizeReadable := formatSize(sizeInBytes)
-
-		partitionDesc := fmt.Sprintf("[%s](%s)", partitionName, sizeReadable)
-		bar := progress.AddBar(int64(len(partition.Operations)),
-			mpb.PrependDecorators(
-				decor.Name(partitionDesc, decor.WCSyncSpaceR),
-			),
-			mpb.AppendDecorators(
-				decor.Percentage(decor.WC{W: 5}),
-				decor.Counters(0, " | %d/%d"),
-				decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 6}, decor.WCSyncSpace),
-				decor.AverageSpeed(0, fmt.Sprintf(" | %%.2f %s", i18n.I18nMsg.Dumper.OpsSuffix)),
-			),
-		)
-		bars[partitionName] = bar
-	}
+	// progress rendering moved to cmd layer; dumper will only report progress via callback
 
 	var completedPartitions []string
 	var mu sync.Mutex
@@ -234,9 +207,8 @@ func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpda
 			defer func() { <-semaphore }()
 
 			partitionName := p.GetPartitionName()
-			bar := bars[partitionName]
 
-			data, err := d.extractSinglePartitionToBytesOptimized(p, bar)
+			data, err := d.extractSinglePartitionToBytesOptimized(p)
 			if err != nil {
 				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
 				return
@@ -269,13 +241,12 @@ func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpda
 	}
 
 	wg.Wait()
-	progress.Wait()
 
 	return nil
 }
 
 // extractSinglePartitionToBytesOptimized extracts a single partition to bytes with optimized multi-threading
-func (d *Dumper) extractSinglePartitionToBytesOptimized(partition *metadata.PartitionUpdate, bar *mpb.Bar) ([]byte, error) {
+func (d *Dumper) extractSinglePartitionToBytesOptimized(partition *metadata.PartitionUpdate) ([]byte, error) {
 	var sizeInBlocks uint64
 	for _, operation := range partition.GetOperations() {
 		for _, extent := range operation.GetDstExtents() {
@@ -320,7 +291,6 @@ func (d *Dumper) extractSinglePartitionToBytesOptimized(partition *metadata.Part
 			for item := range workChan {
 				err := d.processOperationToBytesOptimized(item.op, partitionData, bufferPool)
 				resultChan <- err
-				bar.Increment()
 			}
 		}()
 	}
@@ -658,35 +628,7 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 	if workers <= 0 {
 		workers = runtime.NumCPU()
 	}
-
-	progress := mpb.New()
-
-	bars := make(map[string]*mpb.Bar)
-	for _, part := range partitions {
-		partitionName := part.Partition.GetPartitionName()
-		var sizeInBlocks uint64
-		for _, operation := range part.Partition.GetOperations() {
-			for _, extent := range operation.GetDstExtents() {
-				sizeInBlocks += extent.GetNumBlocks()
-			}
-		}
-		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-		sizeReadable := formatSize(sizeInBytes)
-
-		partitionDesc := fmt.Sprintf("[%s](%s)", partitionName, sizeReadable)
-		bar := progress.AddBar(int64(len(part.Operations)),
-			mpb.PrependDecorators(
-				decor.Name(partitionDesc, decor.WCSyncSpaceR),
-			),
-			mpb.AppendDecorators(
-				decor.Percentage(decor.WC{W: 5}),
-				decor.Counters(0, " | %d/%d"),
-				decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 6}, decor.WCSyncSpace),
-				decor.AverageSpeed(0, fmt.Sprintf(" | %%.2f %s", i18n.I18nMsg.Dumper.OpsSuffix)),
-			),
-		)
-		bars[partitionName] = bar
-	}
+	// progress rendering moved to cmd layer; dumper only reports progress via callbacks
 
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, workers)
@@ -701,9 +643,8 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 			defer func() { <-semaphore }()
 
 			partitionName := p.Partition.GetPartitionName()
-			bar := bars[partitionName]
 
-			if err := d.processPartition(p, outputDir, isDiff, oldDir, bar, progressCallback); err != nil {
+			if err := d.processPartition(p, outputDir, isDiff, oldDir, progressCallback); err != nil {
 				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
 			} else {
 				mu.Lock()
@@ -714,12 +655,11 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 	}
 
 	wg.Wait()
-	progress.Wait()
 
 	return nil
 }
 
-func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, isDiff bool, oldDir string, bar *mpb.Bar, progressCallback ProgressCallback) error {
+func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
 	partitionName := part.Partition.GetPartitionName()
 
 	outputPath := filepath.Join(outputDir, partitionName+".img")
@@ -739,15 +679,26 @@ func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, isDif
 		defer oldFile.Close()
 	}
 
+	// compute readable size for the partition to include in progress reports
+	var sizeInBlocks uint64
+	for _, operation := range part.Partition.GetOperations() {
+		for _, extent := range operation.GetDstExtents() {
+			sizeInBlocks += extent.GetNumBlocks()
+		}
+	}
+	sizeInBytes := sizeInBlocks * uint64(d.blockSize)
+	sizeReadable := formatSize(sizeInBytes)
+
 	var wrappedCallback ProgressCallback
 	if progressCallback != nil {
 		wrappedCallback = func(progress ProgressInfo) {
 			progress.PartitionName = partitionName
+			progress.SizeReadable = sizeReadable
 			progressCallback(progress)
 		}
 	}
 
-	return d.processOperationsOptimized(part.Operations, outFile, oldFile, isDiff, bar, wrappedCallback)
+	return d.processOperationsOptimized(part.Operations, outFile, oldFile, isDiff, wrappedCallback)
 }
 
 func formatSize(bytes uint64) string {
@@ -766,7 +717,7 @@ func formatSize(bytes uint64) string {
 	}
 }
 
-func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, bar *mpb.Bar, progressCallback ProgressCallback) error {
+func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, progressCallback ProgressCallback) error {
 	const maxBufferSize = 64 * 1024 * 1024 // 64MB
 	bufferPool := make(chan []byte, runtime.NumCPU())
 	for i := 0; i < runtime.NumCPU(); i++ {
@@ -796,7 +747,6 @@ func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.
 			for item := range workChan {
 				err := d.processOperationOptimized(item.op, outFile, oldFile, isDiff, bufferPool)
 				resultChan <- err
-				bar.Increment()
 
 				if progressCallback != nil {
 					progressMutex.Lock()
