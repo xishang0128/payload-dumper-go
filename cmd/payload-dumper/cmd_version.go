@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
+	"github.com/xishang0128/payload-dumper-go/constant"
 	"github.com/xishang0128/payload-dumper-go/dumper"
 )
 
@@ -15,7 +16,7 @@ var versionCmd = &cobra.Command{
 	Long:  i18n.I18nMsg.App.VersionCmdLong,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("%s\n", i18n.I18nMsg.App.VersionTitle)
-		fmt.Printf("%s: 0.1.0\n", i18n.I18nMsg.App.VersionLabel)
+		fmt.Printf("%s: %s(%s)\n", i18n.I18nMsg.App.VersionLabel, constant.Version, constant.BuildTime)
 		fmt.Printf("%s: %s\n", i18n.I18nMsg.App.GoVersionLabel, runtime.Version())
 		fmt.Printf("%s: %s/%s\n", i18n.I18nMsg.App.PlatformLabel, runtime.GOOS, runtime.GOARCH)
 		fmt.Printf("%s: %s\n", i18n.I18nMsg.App.XZImplementationLabel, dumper.GetXZImplementation())
