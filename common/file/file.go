@@ -56,8 +56,7 @@ func createHTTPClientWithDNS() *http.Client {
 			fmt.Sprintf(i18n.I18nMsg.Common.DNSUsingFallbackServers, dnsServers))
 
 		dialer := &net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
+			Timeout: 10 * time.Second,
 		}
 
 		// Create custom resolver with fallback DNS servers
@@ -112,7 +111,7 @@ func createHTTPClientWithDNS() *http.Client {
 
 		return &http.Client{
 			Transport: transport,
-			Timeout:   5 * time.Minute,
+			Timeout:   10 * time.Second,
 		}
 	}
 
@@ -123,7 +122,7 @@ func createHTTPClientWithDNS() *http.Client {
 				RootCAs: createCustomCertPool(),
 			},
 		},
-		Timeout: 5 * time.Minute,
+		Timeout: 10 * time.Second,
 	}
 }
 
