@@ -73,6 +73,11 @@ func runExtract(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 
 	// Extract partitions
 	if err := d.ExtractPartitionsWithOptions(extractOut, partitionNames, extractWorkers, extractUseBuffer); err != nil {
@@ -88,6 +93,11 @@ func selectPartitionsInteractively(p string) ([]string, error) {
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 	partitions, err := d.ListPartitions()
 	if err != nil {
 		return nil, fmt.Errorf(i18n.I18nMsg.Extract.FailedToListPartitions, err)
@@ -149,7 +159,6 @@ func createDumper(p string) (*dumper.Dumper, error) {
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToOpen, err)
 	}
-	defer reader.Close()
 
 	return dumper.New(reader)
 }

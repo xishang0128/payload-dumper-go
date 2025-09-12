@@ -37,6 +37,14 @@ type Dumper struct {
 	blockSize   uint32
 }
 
+// Close releases underlying resources held by the Dumper (e.g. the payload reader).
+func (d *Dumper) Close() error {
+	if d == nil || d.payloadFile == nil {
+		return nil
+	}
+	return d.payloadFile.Close()
+}
+
 // PartitionInfo represents information about a partition
 type PartitionInfo struct {
 	PartitionName string `json:"partition_name"`
