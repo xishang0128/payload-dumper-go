@@ -40,16 +40,18 @@ const (
 )
 
 var (
-	extractOut           string
-	extractPartitions    string
-	extractWorkers       int
-	extractUseBuffer     bool
-	extractHTTPWorkers   int
-	extractHTTPCacheSize string
-	extractVerify        bool
-	extractPprofAddr     string
-	extractHeapProfile   string
-	extractMaxBufferMB   int
+	extractOut              string
+	extractPartitions       string
+	extractWorkers          int // Number of worker threads per partition (for processing operations within a single partition)
+	extractPartitionWorkers int // Number of partitions to process concurrently
+	extractUseBuffer        bool
+	extractHTTPWorkers      int
+	extractHTTPCacheSize    string
+	extractVerify           bool
+	extractPprofAddr        string
+	extractHeapProfile      string
+	extractMaxBufferMB      int
+	extractMultithreadMB    int // Partition size threshold (in MB) for multi-threading
 )
 
 func initExtractCmd() {
@@ -64,13 +66,15 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
+	extractCmd.Flags().IntVar(&extractPartitionWorkers, "partition-workers", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagPartitionWorkers)
 	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
 	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
 	extractCmd.Flags().StringVar(&extractHTTPCacheSize, "http-cache-size", "", i18n.I18nMsg.Extract.FlagHTTPCacheSize)
 	extractCmd.Flags().IntVar(&extractMaxBufferMB, "max-buffer-mb", defaultMaxBufferMB, i18n.I18nMsg.Extract.FlagMaxBufferMB)
+	extractCmd.Flags().IntVar(&extractMultithreadMB, "multithread-threshold-mb", 128, i18n.I18nMsg.Extract.FlagMultithreadThresholdMB)
 	extractCmd.Flags().StringVar(&extractPprofAddr, "pprof-addr", "", i18n.I18nMsg.Extract.FlagPprofAddr)
 	extractCmd.Flags().StringVar(&extractHeapProfile, "heap-profile", "", i18n.I18nMsg.Extract.FlagHeapProfile)
-	extractCmd.Flags().BoolVar(&extractVerify, "verify", false, "verify partition sha256 after extraction")
+	extractCmd.Flags().BoolVar(&extractVerify, "verify", false, i18n.I18nMsg.Extract.FlagVerify)
 
 	rootCmd.AddCommand(extractCmd)
 }
@@ -104,7 +108,7 @@ func runExtract(cmd *cobra.Command, args []string) {
 
 	progressCallback := createProgressCallback(progressManager, verificationManager)
 
-	if err := d.ExtractPartitionsWithOptionsAndProgress(extractOut, partitionNames, extractWorkers, extractUseBuffer, progressCallback); err != nil {
+	if err := d.ExtractPartitionsWithFullOptions(extractOut, partitionNames, extractPartitionWorkers, extractWorkers, extractUseBuffer, progressCallback); err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.ErrorFailedToExtract, err)
 	}
 
@@ -126,6 +130,12 @@ func setupExtractionConfig() {
 		extractMaxBufferMB = defaultMaxBufferMB
 	}
 	dumper.MaxBufferSize = int64(extractMaxBufferMB) * 1024 * 1024
+
+	// Set multithread threshold (0 means always use multi-threading)
+	if extractMultithreadMB < 0 {
+		extractMultithreadMB = 128 // Default to 128MB
+	}
+	dumper.SetMultithreadThreshold(uint64(extractMultithreadMB) * 1024 * 1024)
 }
 
 // startPprofServer starts the pprof server if requested

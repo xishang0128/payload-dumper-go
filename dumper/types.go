@@ -25,6 +25,16 @@ type Dumper struct {
 // Value is in bytes. Default set internally but can be overridden by callers (e.g., cmd layer).
 var MaxBufferSize int64 = 64 * 1024 * 1024 // 64 MB
 
+// MultithreadThreshold defines the minimum partition size for multi-threading
+// Partitions smaller than this size will be processed with single thread
+var MultithreadThreshold uint64 = 128 * 1024 * 1024 // 128 MB (default)
+
+// SetMultithreadThreshold sets the threshold for multi-threading decision
+// Partitions larger than this threshold will use multi-threading, smaller ones will use single-threading
+func SetMultithreadThreshold(threshold uint64) {
+	MultithreadThreshold = threshold
+}
+
 // PartitionInfo represents information about a partition
 type PartitionInfo struct {
 	PartitionName string `json:"partition_name"`

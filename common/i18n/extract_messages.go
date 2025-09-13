@@ -6,14 +6,17 @@ type ExtractMessages struct {
 	Short string
 	Long  string
 
-	FlagPartitions            string
-	FlagWorkers               string
-	FlagHTTPWorkers           string
-	FlagHTTPCacheSize         string
-	ErrorInvalidHTTPCacheSize string
-	FlagPprofAddr             string
-	FlagHeapProfile           string
-	FlagMaxBufferMB           string
+	FlagPartitions             string
+	FlagWorkers                string
+	FlagPartitionWorkers       string
+	FlagMultithreadThresholdMB string
+	FlagHTTPWorkers            string
+	FlagHTTPCacheSize          string
+	ErrorInvalidHTTPCacheSize  string
+	FlagPprofAddr              string
+	FlagHeapProfile            string
+	FlagMaxBufferMB            string
+	FlagVerify                 string
 
 	ErrorFailedToExtract string
 	ExtractionCompleted  string
@@ -50,14 +53,17 @@ var EnglishExtractMessages = ExtractMessages{
 	Short: "Extract partitions from payload file",
 	Long:  `Extract all or specified partitions from Android OTA payload file.`,
 
-	FlagPartitions:            "comma separated list of partitions to extract",
-	FlagWorkers:               "number of workers",
-	FlagHTTPWorkers:           "max concurrent HTTP range requests (0 = unlimited)",
-	FlagHTTPCacheSize:         "size of HTTP read cache (supports suffix K/M/G, e.g. 4M; 0 = default 1 MiB)",
-	ErrorInvalidHTTPCacheSize: "invalid http-cache-size: %v",
-	FlagPprofAddr:             "address to start pprof HTTP server (e.g. localhost:6060)",
-	FlagHeapProfile:           "write heap profile to file after extraction",
-	FlagMaxBufferMB:           "maximum per-worker buffer size in MB (default 64)",
+	FlagPartitions:             "comma separated list of partitions to extract",
+	FlagWorkers:                "number of worker threads per partition (for processing operations within a single partition)",
+	FlagPartitionWorkers:       "number of partitions to process concurrently",
+	FlagMultithreadThresholdMB: "minimum partition size (in MB) to enable multi-threading (0 to always use multi-threading)",
+	FlagHTTPWorkers:            "max concurrent HTTP range requests (0 = unlimited)",
+	FlagHTTPCacheSize:          "size of HTTP read cache (supports suffix K/M/G, e.g. 4M; 0 = default 1 MiB)",
+	ErrorInvalidHTTPCacheSize:  "invalid http-cache-size: %v",
+	FlagPprofAddr:              "address to start pprof HTTP server (e.g. localhost:6060)",
+	FlagHeapProfile:            "write heap profile to file after extraction",
+	FlagMaxBufferMB:            "maximum per-worker buffer size in MB (default 64)",
+	FlagVerify:                 "verify partition sha256 after extraction",
 
 	ErrorFailedToExtract: "Failed to extract partitions: %v",
 	ExtractionCompleted:  "Extraction completed successfully!",
@@ -94,14 +100,17 @@ var ChineseExtractMessages = ExtractMessages{
 	Short: "从 payload 文件中提取分区",
 	Long:  `从 Android OTA payload 文件中提取全部或指定的分区。`,
 
-	FlagPartitions:            "要提取的分区列表，用逗号分隔",
-	FlagWorkers:               "工作线程数",
-	FlagHTTPWorkers:           "最大并发 HTTP Range 请求数 (0 = 不限制)",
-	FlagHTTPCacheSize:         "HTTP 读取缓存大小，支持后缀 K/M/G，例如 4M；0 = 默认 1 MiB",
-	ErrorInvalidHTTPCacheSize: "无效的 http-cache-size: %v",
-	FlagPprofAddr:             "启动 pprof HTTP 服务的地址（例如 localhost:6060）",
-	FlagHeapProfile:           "在提取完成后将 heap profile 写入到文件",
-	FlagMaxBufferMB:           "每个 worker 可使用的最大缓冲区大小（MB）（默认 64）",
+	FlagPartitions:             "要提取的分区列表，用逗号分隔",
+	FlagWorkers:                "每个分区的工作线程数（用于处理单个分区内的操作）",
+	FlagPartitionWorkers:       "同时处理的分区数量",
+	FlagMultithreadThresholdMB: "启用多线程的最小分区大小（MB）（设为0则始终使用多线程）",
+	FlagHTTPWorkers:            "最大并发 HTTP Range 请求数 (0 = 不限制)",
+	FlagHTTPCacheSize:          "HTTP 读取缓存大小，支持后缀 K/M/G，例如 4M；0 = 默认 1 MiB",
+	ErrorInvalidHTTPCacheSize:  "无效的 http-cache-size: %v",
+	FlagPprofAddr:              "启动 pprof HTTP 服务的地址（例如 localhost:6060）",
+	FlagHeapProfile:            "在提取完成后将 heap profile 写入到文件",
+	FlagMaxBufferMB:            "每个 worker 可使用的最大缓冲区大小（MB）（默认 64）",
+	FlagVerify:                 "提取后验证分区的 SHA256 校验和",
 
 	ErrorFailedToExtract: "无法提取分区: %v",
 	ExtractionCompleted:  "提取完成！",

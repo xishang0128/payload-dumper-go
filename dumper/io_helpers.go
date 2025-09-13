@@ -13,10 +13,14 @@ import (
 	"github.com/xishang0128/payload-dumper-go/common/metadata"
 )
 
-func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, progressCallback ProgressCallback) error {
+func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, operationWorkers int, isDiff bool, progressCallback ProgressCallback) error {
+	if operationWorkers <= 0 {
+		operationWorkers = runtime.NumCPU()
+	}
+
 	// Use nil placeholders to avoid preallocating large buffers. Allocate on demand in workers.
-	bufferPool := make(chan []byte, runtime.NumCPU())
-	for i := 0; i < runtime.NumCPU(); i++ {
+	bufferPool := make(chan []byte, operationWorkers)
+	for i := 0; i < operationWorkers; i++ {
 		bufferPool <- nil
 	}
 
@@ -25,10 +29,10 @@ func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.
 		op    Operation
 	}
 
-	workChan := make(chan workItem, runtime.NumCPU()*2)
+	workChan := make(chan workItem, operationWorkers*2)
 	resultChan := make(chan error, len(operations))
 
-	workerCount := min(runtime.NumCPU(), len(operations))
+	workerCount := min(operationWorkers, len(operations))
 
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
@@ -82,6 +86,79 @@ func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.
 	}
 
 	return nil
+}
+
+// processOperationsSingleThreaded processes operations sequentially without multi-threading
+func (d *Dumper) processOperationsSingleThreaded(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, progressCallback ProgressCallback) error {
+	totalOps := len(operations)
+
+	for i, op := range operations {
+		err := d.processOperationSingleThreaded(op, outFile, oldFile, isDiff)
+		if err != nil {
+			return err
+		}
+
+		// Report progress
+		if progressCallback != nil {
+			progressPercent := float64(i+1) / float64(totalOps) * 100
+			progressInfo := ProgressInfo{
+				PartitionName:   "",
+				TotalOperations: totalOps,
+				CompletedOps:    i + 1,
+				ProgressPercent: progressPercent,
+			}
+			progressCallback(progressInfo)
+		}
+	}
+
+	return nil
+}
+
+// processOperationSingleThreaded processes a single operation without buffer pool optimization
+func (d *Dumper) processOperationSingleThreaded(op Operation, outFile *os.File, oldFile *os.File, isDiff bool) error {
+	operation := op.Operation
+
+	var data []byte
+	var err error
+
+	if op.Length > 0 {
+		data, err = d.payloadFile.Read(op.Offset, int(op.Length))
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToReadOperationData, err)
+		}
+	}
+
+	switch operation.GetType() {
+	case metadata.InstallOperation_REPLACE:
+		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), data)
+
+	case metadata.InstallOperation_REPLACE_BZ:
+		reader := bzip2.NewReader(bytes.NewReader(data))
+		decompressed, err := io.ReadAll(reader)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressBzip2, err)
+		}
+		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_REPLACE_XZ:
+		decompressed, err := decompressXZ(data)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressXZ, err)
+		}
+		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_SOURCE_COPY:
+		if !isDiff {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorSourceCopyOnlyForDiff)
+		}
+		return d.sourceCopyThreadSafe(outFile, oldFile, operation)
+
+	case metadata.InstallOperation_ZERO:
+		return d.writeZerosThreadSafe(outFile, operation.GetDstExtents())
+
+	default:
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorUnsupportedOperationType, operation.GetType())
+	}
 }
 
 func (d *Dumper) processOperationOptimized(op Operation, outFile *os.File, oldFile *os.File, isDiff bool, bufferPool chan []byte) error {
