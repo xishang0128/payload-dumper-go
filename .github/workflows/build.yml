@@ -139,11 +139,10 @@ jobs:
             VERSION="${GITHUB_REF#refs/tags/v}"
           fi
           if [ -z "${VERSION}" ]; then
-            VERSION="0.1.0"
+            VERSION="dev"
           fi
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          BUILDTIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          echo "BUILDTIME=${BUILDTIME}" >> $GITHUB_ENV
+          echo "BUILDTIME=$(date)" >> $GITHUB_ENV
 
       - name: Install Linux dependencies for CGO
         if: matrix.goos == 'linux' && matrix.cgo == true
