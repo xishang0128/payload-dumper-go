@@ -53,6 +53,21 @@ jobs:
             cgo: true
             static: true
             output: payload-dumper-darwin-arm64-cgo-static
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            goamd64: v3
+            cgo: true
+            static: true
+            compiler: mingw
+            output: payload-dumper-windows-amd64-v3-cgo-static-mingw
+          - os: windows-11-arm
+            goos: windows
+            goarch: arm64
+            cgo: true
+            static: true
+            compiler: mingw
+            output: payload-dumper-windows-arm64-cgo-static-mingw
 
           # Dynamic CGO
           - os: macos-13
@@ -132,6 +147,7 @@ jobs:
           go-version: '1.25'
 
       - name: Set Environment Variables
+        shell: bash
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
@@ -153,6 +169,28 @@ jobs:
           if [[ "${{ matrix.static }}" == "true" ]]; then
             sudo apt-get install -y liblzma-dev:$(dpkg --print-architecture) musl-dev
           fi
+
+      - name: Setup MSYS2 for Windows x86_64
+        if: matrix.goos == 'windows' && matrix.cgo == true && matrix.goarch == 'amd64' && matrix.compiler == 'mingw'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-xz
+            mingw-w64-x86_64-pkg-config
+
+      - name: Setup MSYS2 for Windows ARM64 (Clang toolchain)
+        if: matrix.goos == 'windows' && matrix.cgo == true && matrix.goarch == 'arm64' && matrix.compiler == 'mingw'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: >-
+            mingw-w64-clang-aarch64-gcc
+            mingw-w64-clang-aarch64-xz
+            mingw-w64-clang-aarch64-pkg-config
 
       - name: Build CGO version (Linux)
         if: matrix.cgo == true && matrix.goos == 'linux'
@@ -205,6 +243,57 @@ jobs:
             go build \
               -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
               -o bin/${{ matrix.output }} ./cmd/payload-dumper
+          fi
+
+      - name: Set MinGW compiler paths
+        if: matrix.goos == 'windows' && matrix.cgo == true && matrix.compiler == 'mingw'
+        shell: msys2 {0}
+        run: |
+          if [[ "${{ matrix.goarch }}" == "amd64" ]]; then
+            GCC_PATH=$(which x86_64-w64-mingw32-gcc)
+            GXX_PATH=$(which x86_64-w64-mingw32-g++)
+          elif [[ "${{ matrix.goarch }}" == "arm64" ]]; then
+            GCC_PATH=$(which aarch64-w64-mingw32-gcc)
+            GXX_PATH=$(which aarch64-w64-mingw32-g++)
+          fi
+          GCC_WIN_PATH=$(cygpath -w "$GCC_PATH")
+          GXX_WIN_PATH=$(cygpath -w "$GXX_PATH")
+
+          if [[ "${{ matrix.goarch }}" == "amd64" ]]; then
+            MINGW_ROOT=$(cygpath -w "/mingw64")
+          elif [[ "${{ matrix.goarch }}" == "arm64" ]]; then
+            MINGW_ROOT=$(cygpath -w "/clangarm64")
+          fi
+          echo "CC=$GCC_WIN_PATH" >> $GITHUB_ENV
+          echo "CXX=$GXX_WIN_PATH" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-I${MINGW_ROOT}/include" >> $GITHUB_ENV
+          
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -Wl,-Bstatic -llzma -Wl,-Bdynamic" >> $GITHUB_ENV
+          else
+            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -llzma" >> $GITHUB_ENV
+          fi
+          echo "CPATH=${MINGW_ROOT}/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=${MINGW_ROOT}/lib" >> $GITHUB_ENV
+          echo "${MINGW_ROOT}/bin" >> $GITHUB_PATH
+
+      - name: Build CGO version (Windows MinGW)
+        if: matrix.goos == 'windows' && matrix.cgo == true && matrix.compiler == 'mingw'
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOAMD64: ${{ matrix.goamd64 }}
+          CGO_ENABLED: 1
+        shell: bash
+        run: |
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            go build -a \
+              -ldflags="-linkmode external -extldflags '-static' -s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
+              -o bin/${{ matrix.output }}.exe ./cmd/payload-dumper
+          else
+            go build \
+              -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
+              -o bin/${{ matrix.output }}.exe ./cmd/payload-dumper
           fi
 
       - name: Build Pure Go version
