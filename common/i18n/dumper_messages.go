@@ -11,8 +11,10 @@ type DumperMessages struct {
 	ErrorFailedToOpenOldFile       string
 	ErrorFailedToReadOperationData string
 	ErrorFailedToDecompressBzip2   string
+	ErrorFailedToDecompressBrotli  string
 	ErrorFailedToCreateXZReader    string
 	ErrorFailedToDecompressXZ      string
+	ErrorFailedToApplyBspatch      string
 	ErrorSourceCopyOnlyForDiff     string
 	ErrorUnsupportedOperationType  string
 	ErrorFailedToWriteToFile       string
@@ -51,8 +53,10 @@ var EnglishDumperMessages = DumperMessages{
 	ErrorFailedToOpenOldFile:       "failed to open old file: %v",
 	ErrorFailedToReadOperationData: "failed to read operation data: %v",
 	ErrorFailedToDecompressBzip2:   "failed to decompress bzip2 data: %v",
+	ErrorFailedToDecompressBrotli:  "failed to decompress brotli data: %v",
 	ErrorFailedToCreateXZReader:    "failed to create xz reader: %v",
 	ErrorFailedToDecompressXZ:      "failed to decompress xz data: %v",
+	ErrorFailedToApplyBspatch:      "failed to apply bspatch: %v",
 	ErrorSourceCopyOnlyForDiff:     "SOURCE_COPY supported only for differential OTA",
 	ErrorUnsupportedOperationType:  "unsupported operation type: %v",
 	ErrorFailedToWriteToFile:       "failed to write to file: %v",
@@ -91,8 +95,10 @@ var ChineseDumperMessages = DumperMessages{
 	ErrorFailedToOpenOldFile:       "打开旧文件失败: %v",
 	ErrorFailedToReadOperationData: "读取操作数据失败: %v",
 	ErrorFailedToDecompressBzip2:   "解压bzip2数据失败: %v",
+	ErrorFailedToDecompressBrotli:  "解压brotli数据失败: %v",
 	ErrorFailedToCreateXZReader:    "创建xz读取器失败: %v",
 	ErrorFailedToDecompressXZ:      "解压xz数据失败: %v",
+	ErrorFailedToApplyBspatch:      "应用 bspatch 失败: %v",
 	ErrorSourceCopyOnlyForDiff:     "SOURCE_COPY 操作仅支持差分 OTA",
 	ErrorUnsupportedOperationType:  "不支持的操作类型: %v",
 	ErrorFailedToWriteToFile:       "写入文件失败: %v",

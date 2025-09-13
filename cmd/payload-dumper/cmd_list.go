@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/xishang0128/payload-dumper-go/common/file"
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 	"github.com/xishang0128/payload-dumper-go/dumper"
 )
@@ -51,23 +50,8 @@ func runList(cmd *cobra.Command, args []string) {
 
 	payloadFile := args[0]
 
-	// Create file reader
-	var reader file.Reader
-	var err error
-
-	if strings.HasPrefix(payloadFile, "http://") || strings.HasPrefix(payloadFile, "https://") {
-		reader, err = file.NewHTTPFile(payloadFile)
-	} else {
-		reader, err = file.NewLocalFile(payloadFile)
-	}
-
-	if err != nil {
-		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToOpen, err)
-	}
-	defer reader.Close()
-
 	// Create dumper
-	d, err := dumper.New(reader)
+	d, err := createDumper(payloadFile)
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}

@@ -4,6 +4,7 @@ vendor/
 .DS_Store
 *output*/
 bin/
+*old*/
 
 payload-dumper*
 *.zip

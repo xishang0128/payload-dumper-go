@@ -18,8 +18,6 @@ type ExtractMessages struct {
 	ErrorFailedToExtract string
 	ExtractionCompleted  string
 
-	DefaultOld string
-
 	// Progress related messages
 	ProcessingPartition string
 	CompletedPartition  string
@@ -57,8 +55,6 @@ var EnglishExtractMessages = ExtractMessages{
 	ErrorFailedToExtract: "Failed to extract partitions: %v",
 	ExtractionCompleted:  "Extraction completed successfully!",
 
-	DefaultOld: "old",
-
 	// Progress related messages
 	ProcessingPartition: "Processing partition: %s (size: %s, %d operations)",
 	CompletedPartition:  "Completed partition: %s",
@@ -95,8 +91,6 @@ var ChineseExtractMessages = ExtractMessages{
 
 	ErrorFailedToExtract: "无法提取分区: %v",
 	ExtractionCompleted:  "提取完成！",
-
-	DefaultOld: "旧版本",
 
 	// Progress related messages
 	ProcessingPartition: "正在处理分区: %s (大小: %s, %d 个操作)",

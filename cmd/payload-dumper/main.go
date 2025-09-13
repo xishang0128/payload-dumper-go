@@ -32,7 +32,7 @@ func init() {
 	initExtractCmd()
 	initListCmd()
 	initMetadataCmd()
-	initExtractDiffCmd()
+	// initExtractDiffCmd()
 	initVersionCmd()
 }
 
