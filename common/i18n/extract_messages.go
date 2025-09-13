@@ -7,6 +7,7 @@ type ExtractMessages struct {
 	Long  string
 
 	FlagPartitions             string
+	FlagAll                    string
 	FlagWorkers                string
 	FlagPartitionWorkers       string
 	FlagMultithreadThresholdMB string
@@ -54,6 +55,7 @@ var EnglishExtractMessages = ExtractMessages{
 	Long:  `Extract all or specified partitions from Android OTA payload file.`,
 
 	FlagPartitions:             "comma separated list of partitions to extract",
+	FlagAll:                    "extract all partitions",
 	FlagWorkers:                "number of worker threads per partition (for processing operations within a single partition)",
 	FlagPartitionWorkers:       "number of partitions to process concurrently",
 	FlagMultithreadThresholdMB: "minimum partition size (in MB) to enable multi-threading (0 to always use multi-threading)",
@@ -101,9 +103,10 @@ var ChineseExtractMessages = ExtractMessages{
 	Long:  `从 Android OTA payload 文件中提取全部或指定的分区。`,
 
 	FlagPartitions:             "要提取的分区列表，用逗号分隔",
+	FlagAll:                    "提取全部分区",
 	FlagWorkers:                "每个分区的工作线程数（用于处理单个分区内的操作）",
 	FlagPartitionWorkers:       "同时处理的分区数量",
-	FlagMultithreadThresholdMB: "启用多线程的最小分区大小（MB）（设为0则始终使用多线程）",
+	FlagMultithreadThresholdMB: "启用多线程的最小分区大小（MB）（设为 0 则始终使用多线程）",
 	FlagHTTPWorkers:            "最大并发 HTTP Range 请求数 (0 = 不限制)",
 	FlagHTTPCacheSize:          "HTTP 读取缓存大小，支持后缀 K/M/G，例如 4M；0 = 默认 1 MiB",
 	ErrorInvalidHTTPCacheSize:  "无效的 http-cache-size: %v",

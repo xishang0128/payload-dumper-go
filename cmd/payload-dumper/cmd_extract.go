@@ -42,8 +42,9 @@ const (
 var (
 	extractOut              string
 	extractPartitions       string
-	extractWorkers          int // Number of worker threads per partition (for processing operations within a single partition)
-	extractPartitionWorkers int // Number of partitions to process concurrently
+	extractAll              bool // Extract all partitions
+	extractWorkers          int  // Number of worker threads per partition (for processing operations within a single partition)
+	extractPartitionWorkers int  // Number of partitions to process concurrently
 	extractUseBuffer        bool
 	extractHTTPWorkers      int
 	extractHTTPCacheSize    string
@@ -65,6 +66,7 @@ func initExtractCmd() {
 
 	extractCmd.Flags().StringVarP(&extractOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
+	extractCmd.Flags().BoolVarP(&extractAll, "all", "a", false, i18n.I18nMsg.Extract.FlagAll)
 	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
 	extractCmd.Flags().IntVar(&extractPartitionWorkers, "partition-workers", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagPartitionWorkers)
 	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
@@ -89,11 +91,6 @@ func runExtract(cmd *cobra.Command, args []string) {
 	pprofServer := startPprofServer()
 	defer stopPprofServer(pprofServer)
 
-	partitionNames, err := selectPartitions(payloadFile)
-	if err != nil {
-		log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
-	}
-
 	configureHTTPClient()
 
 	d, err := createDumper(payloadFile)
@@ -101,6 +98,11 @@ func runExtract(cmd *cobra.Command, args []string) {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
 	defer closeDumper(d)
+
+	partitionNames, err := getPartitionNames(payloadFile, d)
+	if err != nil {
+		log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
+	}
 
 	progress := mpb.New(mpb.WithWidth(defaultProgressWidth))
 	progressManager := newProgressManager(progress)
@@ -164,6 +166,27 @@ func stopPprofServer(server *http.Server) {
 // selectPartitions selects partitions either from flags or interactively
 func selectPartitions(payloadFile string) ([]string, error) {
 	if extractPartitions != "" {
+		partitionNames := strings.Split(extractPartitions, ",")
+		for i, name := range partitionNames {
+			partitionNames[i] = strings.TrimSpace(name)
+		}
+		return partitionNames, nil
+	}
+
+	return selectPartitionsInteractively(payloadFile)
+}
+
+// getPartitionNames gets partition names either from flags, all partitions, or interactively
+func getPartitionNames(payloadFile string, d *dumper.Dumper) ([]string, error) {
+	if extractAll {
+		return []string{}, nil
+	}
+
+	if extractPartitions != "" {
+		if strings.ToLower(strings.TrimSpace(extractPartitions)) == "all" {
+			return []string{}, nil
+		}
+
 		partitionNames := strings.Split(extractPartitions, ",")
 		for i, name := range partitionNames {
 			partitionNames[i] = strings.TrimSpace(name)
