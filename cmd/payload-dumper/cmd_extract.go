@@ -40,19 +40,18 @@ const (
 )
 
 var (
-	extractOut              string
-	extractPartitions       string
-	extractAll              bool // Extract all partitions
-	extractWorkers          int  // Number of worker threads per partition (for processing operations within a single partition)
-	extractPartitionWorkers int  // Number of partitions to process concurrently
-	extractUseBuffer        bool
-	extractHTTPWorkers      int
-	extractHTTPCacheSize    string
-	extractVerify           bool
-	extractPprofAddr        string
-	extractHeapProfile      string
-	extractMaxBufferMB      int
-	extractMultithreadMB    int // Partition size threshold (in MB) for multi-threading
+	extractOut                      string
+	extractPartitions               string
+	extractAll                      bool // Extract all partitions
+	extractHTTPWorkers              int
+	extractHTTPCacheSize            string
+	extractVerify                   bool
+	extractPprofAddr                string
+	extractHeapProfile              string
+	extractMaxBufferMB              int
+	extractPartitionSizeThresholdMB int    // Partition size threshold (in MB) to distinguish between large and small partitions
+	extractStrategy                 string // Extraction strategy: "sequential" or "adaptive"
+	extractCPUCount                 int    // Number of CPU cores to use (0 = auto-detect)
 )
 
 func initExtractCmd() {
@@ -67,13 +66,12 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().BoolVarP(&extractAll, "all", "a", false, i18n.I18nMsg.Extract.FlagAll)
-	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
-	extractCmd.Flags().IntVar(&extractPartitionWorkers, "partition-workers", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagPartitionWorkers)
-	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
 	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
 	extractCmd.Flags().StringVar(&extractHTTPCacheSize, "http-cache-size", "", i18n.I18nMsg.Extract.FlagHTTPCacheSize)
 	extractCmd.Flags().IntVar(&extractMaxBufferMB, "max-buffer-mb", defaultMaxBufferMB, i18n.I18nMsg.Extract.FlagMaxBufferMB)
-	extractCmd.Flags().IntVar(&extractMultithreadMB, "multithread-threshold-mb", 128, i18n.I18nMsg.Extract.FlagMultithreadThresholdMB)
+	extractCmd.Flags().IntVar(&extractPartitionSizeThresholdMB, "partition-size-threshold-mb", 128, i18n.I18nMsg.Extract.FlagPartitionSizeThresholdMB)
+	extractCmd.Flags().StringVar(&extractStrategy, "strategy", "adaptive", i18n.I18nMsg.Extract.FlagStrategy)
+	extractCmd.Flags().IntVar(&extractCPUCount, "cpu-count", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagCPUCount)
 	extractCmd.Flags().StringVar(&extractPprofAddr, "pprof-addr", "", i18n.I18nMsg.Extract.FlagPprofAddr)
 	extractCmd.Flags().StringVar(&extractHeapProfile, "heap-profile", "", i18n.I18nMsg.Extract.FlagHeapProfile)
 	extractCmd.Flags().BoolVar(&extractVerify, "verify", false, i18n.I18nMsg.Extract.FlagVerify)
@@ -99,7 +97,7 @@ func runExtract(cmd *cobra.Command, args []string) {
 	}
 	defer closeDumper(d)
 
-	partitionNames, err := getPartitionNames(payloadFile, d)
+	partitionNames, err := getPartitionNames(payloadFile)
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
 	}
@@ -110,7 +108,10 @@ func runExtract(cmd *cobra.Command, args []string) {
 
 	progressCallback := createProgressCallback(progressManager, verificationManager)
 
-	if err := d.ExtractPartitionsWithFullOptions(extractOut, partitionNames, extractPartitionWorkers, extractWorkers, extractUseBuffer, progressCallback); err != nil {
+	// Determine extraction strategy
+	strategy := getExtractionStrategy(extractStrategy)
+
+	if err := d.ExtractPartitionsWithStrategy(extractOut, partitionNames, strategy, extractCPUCount, progressCallback); err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.ErrorFailedToExtract, err)
 	}
 
@@ -133,11 +134,11 @@ func setupExtractionConfig() {
 	}
 	dumper.MaxBufferSize = int64(extractMaxBufferMB) * 1024 * 1024
 
-	// Set multithread threshold (0 means always use multi-threading)
-	if extractMultithreadMB < 0 {
-		extractMultithreadMB = 128 // Default to 128MB
+	// Set partition size threshold for distinguishing between large and small partitions
+	if extractPartitionSizeThresholdMB < 0 {
+		extractPartitionSizeThresholdMB = 128 // Default to 128MB
 	}
-	dumper.SetMultithreadThreshold(uint64(extractMultithreadMB) * 1024 * 1024)
+	dumper.SetMultithreadThreshold(uint64(extractPartitionSizeThresholdMB) * 1024 * 1024)
 }
 
 // startPprofServer starts the pprof server if requested
@@ -163,21 +164,8 @@ func stopPprofServer(server *http.Server) {
 	}
 }
 
-// selectPartitions selects partitions either from flags or interactively
-func selectPartitions(payloadFile string) ([]string, error) {
-	if extractPartitions != "" {
-		partitionNames := strings.Split(extractPartitions, ",")
-		for i, name := range partitionNames {
-			partitionNames[i] = strings.TrimSpace(name)
-		}
-		return partitionNames, nil
-	}
-
-	return selectPartitionsInteractively(payloadFile)
-}
-
 // getPartitionNames gets partition names either from flags, all partitions, or interactively
-func getPartitionNames(payloadFile string, d *dumper.Dumper) ([]string, error) {
+func getPartitionNames(payloadFile string) ([]string, error) {
 	if extractAll {
 		return []string{}, nil
 	}
@@ -756,4 +744,18 @@ func parseSizeString(s string) (int64, error) {
 
 	bytes := int64(v * float64(multiplier))
 	return bytes, nil
+}
+
+// getExtractionStrategy converts string strategy to dumper.ExtractionStrategy
+func getExtractionStrategy(strategy string) dumper.ExtractionStrategy {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "sequential", "seq":
+		return dumper.StrategySequential
+	case "adaptive", "auto", "":
+		return dumper.StrategyAdaptive
+	default:
+		// Default to adaptive if unknown strategy
+		log.Printf("Unknown extraction strategy '%s', using adaptive strategy", strategy)
+		return dumper.StrategyAdaptive
+	}
 }

@@ -55,40 +55,15 @@ func New(reader file.Reader) (*Dumper, error) {
 // ExtractPartitions extracts specified partitions from the payload.
 // If partitionNames is empty, all partitions will be extracted.
 func (d *Dumper) ExtractPartitions(outputDir string, partitionNames []string, workers int) error {
-	return d.ExtractPartitionsWithProgress(outputDir, partitionNames, workers, nil)
-}
-
-// ExtractPartitionsWithProgress extracts specified partitions with real-time progress reporting.
-// If partitionNames is empty, all partitions will be extracted.
-// The progressCallback will be called with progress updates during extraction.
-func (d *Dumper) ExtractPartitionsWithProgress(outputDir string, partitionNames []string, workers int, progressCallback ProgressCallback) error {
-	return d.ExtractPartitionsWithOptionsAndProgress(outputDir, partitionNames, workers, false, progressCallback)
-}
-
-// ExtractPartitionsWithOptions extracts specified partitions with configurable options.
-// If partitionNames is empty, all partitions will be extracted.
-// If useMemoryBuffer is true, partitions will be processed in memory before writing (uses more RAM but may be faster for small partitions).
-// If useMemoryBuffer is false, partitions will be written directly to disk (more memory efficient for large partitions).
-func (d *Dumper) ExtractPartitionsWithOptions(outputDir string, partitionNames []string, workers int, useMemoryBuffer bool) error {
-	return d.ExtractPartitionsWithOptionsAndProgress(outputDir, partitionNames, workers, useMemoryBuffer, nil)
-}
-
-// ExtractPartitionsWithOptionsAndProgress extracts specified partitions with configurable options and progress reporting.
-// If partitionNames is empty, all partitions will be extracted.
-// If useMemoryBuffer is true, partitions will be processed in memory before writing (uses more RAM but may be faster for small partitions).
-// If useMemoryBuffer is false, partitions will be written directly to disk (more memory efficient for large partitions).
-// The progressCallback will be called with progress updates during extraction.
-func (d *Dumper) ExtractPartitionsWithOptionsAndProgress(outputDir string, partitionNames []string, workers int, useMemoryBuffer bool, progressCallback ProgressCallback) error {
-	return d.ExtractPartitionsWithFullOptions(outputDir, partitionNames, workers, workers, useMemoryBuffer, progressCallback)
+	return d.ExtractPartitionsWithFullOptions(outputDir, partitionNames, workers, workers, nil)
 }
 
 // ExtractPartitionsWithFullOptions extracts specified partitions with full control over concurrency options.
 // partitionWorkers controls how many partitions are processed concurrently.
 // operationWorkers controls how many worker threads are used per partition for processing operations.
 // If partitionNames is empty, all partitions will be extracted.
-// If useMemoryBuffer is true, partitions will be processed in memory before writing.
 // The progressCallback will be called with progress updates during extraction.
-func (d *Dumper) ExtractPartitionsWithFullOptions(outputDir string, partitionNames []string, partitionWorkers, operationWorkers int, useMemoryBuffer bool, progressCallback ProgressCallback) error {
+func (d *Dumper) ExtractPartitionsWithFullOptions(outputDir string, partitionNames []string, partitionWorkers, operationWorkers int, progressCallback ProgressCallback) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 	}
@@ -119,10 +94,6 @@ func (d *Dumper) ExtractPartitionsWithFullOptions(outputDir string, partitionNam
 		return nil
 	}
 
-	if useMemoryBuffer {
-		return d.extractPartitionsViaMemory(partitions, outputDir, progressCallback)
-	}
-
 	partitionsWithOps := make([]PartitionWithOps, 0, len(partitions))
 	for _, partition := range partitions {
 		operations := make([]Operation, 0, len(partition.Operations))
@@ -140,327 +111,6 @@ func (d *Dumper) ExtractPartitionsWithFullOptions(outputDir string, partitionNam
 	}
 
 	return d.multiprocessPartitions(partitionsWithOps, outputDir, partitionWorkers, operationWorkers, false, "", progressCallback)
-}
-
-// extractPartitionsViaMemory extracts partitions using memory buffers with progress reporting
-func (d *Dumper) extractPartitionsViaMemory(partitions []*metadata.PartitionUpdate, outputDir string, progressCallback ProgressCallback) error {
-	// progress rendering moved to cmd layer; dumper will only report progress via callback
-
-	var completedPartitions []string
-	var mu sync.Mutex
-
-	var wg sync.WaitGroup
-	// Use separate processing for large and small partitions
-	largePartitions := make([]*metadata.PartitionUpdate, 0)
-	smallPartitions := make([]*metadata.PartitionUpdate, 0)
-
-	// Separate partitions by size
-	for _, partition := range partitions {
-		if d.shouldUseMultithread(partition) {
-			largePartitions = append(largePartitions, partition)
-		} else {
-			smallPartitions = append(smallPartitions, partition)
-		}
-	}
-
-	// Process large partitions with multi-threading
-	largeSemaphore := make(chan struct{}, runtime.NumCPU())
-	for _, partition := range largePartitions {
-		wg.Add(1)
-		go func(p *metadata.PartitionUpdate) {
-			defer wg.Done()
-			largeSemaphore <- struct{}{}
-			defer func() { <-largeSemaphore }()
-
-			partitionName := p.GetPartitionName()
-
-			data, err := d.extractSinglePartitionToBytesOptimized(p)
-			if err != nil {
-				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
-				return
-			}
-
-			outputPath := filepath.Join(outputDir, partitionName+".img")
-			if err := os.WriteFile(outputPath, data, 0644); err != nil {
-				log.Printf(i18n.I18nMsg.Dumper.ErrorFailedToWritePartition, partitionName, err)
-				return
-			}
-
-			mu.Lock()
-			completedPartitions = append(completedPartitions, partitionName)
-			completed := len(completedPartitions)
-			total := len(partitions)
-			mu.Unlock()
-
-			// Call progress callback if provided
-			if progressCallback != nil {
-				progressPercent := float64(completed) / float64(total) * 100
-				progressInfo := ProgressInfo{
-					PartitionName:   partitionName,
-					TotalOperations: len(p.Operations),
-					CompletedOps:    len(p.Operations),
-					ProgressPercent: progressPercent,
-				}
-				progressCallback(progressInfo)
-			}
-		}(partition)
-	}
-
-	// Process small partitions with single-threading (sequential)
-	smallSemaphore := make(chan struct{}, 1) // Only allow 1 at a time for small partitions
-	for _, partition := range smallPartitions {
-		wg.Add(1)
-		go func(p *metadata.PartitionUpdate) {
-			defer wg.Done()
-			smallSemaphore <- struct{}{}
-			defer func() { <-smallSemaphore }()
-
-			partitionName := p.GetPartitionName()
-
-			data, err := d.extractSinglePartitionToBytesSingleThreaded(p)
-			if err != nil {
-				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
-				return
-			}
-
-			outputPath := filepath.Join(outputDir, partitionName+".img")
-			if err := os.WriteFile(outputPath, data, 0644); err != nil {
-				log.Printf(i18n.I18nMsg.Dumper.ErrorFailedToWritePartition, partitionName, err)
-				return
-			}
-
-			mu.Lock()
-			completedPartitions = append(completedPartitions, partitionName)
-			completed := len(completedPartitions)
-			total := len(partitions)
-			mu.Unlock()
-
-			// Call progress callback if provided
-			if progressCallback != nil {
-				progressPercent := float64(completed) / float64(total) * 100
-				progressInfo := ProgressInfo{
-					PartitionName:   partitionName,
-					TotalOperations: len(p.Operations),
-					CompletedOps:    len(p.Operations),
-					ProgressPercent: progressPercent,
-				}
-				progressCallback(progressInfo)
-			}
-		}(partition)
-	}
-
-	wg.Wait()
-
-	return nil
-}
-
-// extractSinglePartitionToBytesOptimized extracts a single partition to bytes with optimized threading
-// Uses multi-threading for large partitions (>128MB) and single-threading for small partitions
-func (d *Dumper) extractSinglePartitionToBytesOptimized(partition *metadata.PartitionUpdate) ([]byte, error) {
-	// Check if this partition should use multi-threading
-	if !d.shouldUseMultithread(partition) {
-		return d.extractSinglePartitionToBytesSingleThreaded(partition)
-	}
-
-	var sizeInBlocks uint64
-	for _, operation := range partition.GetOperations() {
-		for _, extent := range operation.GetDstExtents() {
-			sizeInBlocks += extent.GetNumBlocks()
-		}
-	}
-	sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-
-	partitionData := make([]byte, sizeInBytes)
-
-	operations := make([]Operation, 0, len(partition.Operations))
-	for _, operation := range partition.Operations {
-		operations = append(operations, Operation{
-			Operation: operation,
-			Offset:    d.dataOffset + int64(operation.GetDataOffset()),
-			Length:    operation.GetDataLength(),
-		})
-	}
-
-	bufferPool := make(chan []byte, runtime.NumCPU())
-	for i := 0; i < runtime.NumCPU(); i++ {
-		bufferPool <- nil
-	}
-
-	type workItem struct {
-		index int
-		op    Operation
-	}
-
-	workChan := make(chan workItem, runtime.NumCPU()*2)
-	resultChan := make(chan error, len(operations))
-
-	workerCount := min(runtime.NumCPU(), len(operations))
-
-	var wg sync.WaitGroup
-	wg.Add(workerCount)
-
-	for range workerCount {
-		go func() {
-			defer wg.Done()
-			for item := range workChan {
-				err := d.processOperationToBytesOptimized(item.op, partitionData, bufferPool)
-				resultChan <- err
-			}
-		}()
-	}
-
-	go func() {
-		defer close(workChan)
-		for i, op := range operations {
-			workChan <- workItem{index: i, op: op}
-		}
-	}()
-
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	for err := range resultChan {
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return partitionData, nil
-}
-
-// extractSinglePartitionToBytesSingleThreaded extracts a single partition to bytes using single-threaded processing
-func (d *Dumper) extractSinglePartitionToBytesSingleThreaded(partition *metadata.PartitionUpdate) ([]byte, error) {
-	var sizeInBlocks uint64
-	for _, operation := range partition.GetOperations() {
-		for _, extent := range operation.GetDstExtents() {
-			sizeInBlocks += extent.GetNumBlocks()
-		}
-	}
-	sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-
-	partitionData := make([]byte, sizeInBytes)
-
-	operations := make([]Operation, 0, len(partition.Operations))
-	for _, operation := range partition.Operations {
-		operations = append(operations, Operation{
-			Operation: operation,
-			Offset:    d.dataOffset + int64(operation.GetDataOffset()),
-			Length:    operation.GetDataLength(),
-		})
-	}
-
-	// Process operations sequentially for small partitions
-	for _, op := range operations {
-		err := d.processOperationToBytesOptimized(op, partitionData, nil) // no buffer pool for single-threaded
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return partitionData, nil
-}
-
-// extractPartitionsToBytesWithProgress is a helper function for internal use with progress reporting
-func (d *Dumper) extractPartitionsToBytesWithProgress(partitions []*metadata.PartitionUpdate, progressCallback ProgressCallback) (map[string][]byte, error) {
-	result := make(map[string][]byte)
-
-	for i, partition := range partitions {
-		partitionName := partition.GetPartitionName()
-
-		var sizeInBlocks uint64
-		for _, operation := range partition.GetOperations() {
-			for _, extent := range operation.GetDstExtents() {
-				sizeInBlocks += extent.GetNumBlocks()
-			}
-		}
-		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-
-		partitionData := make([]byte, sizeInBytes)
-
-		operations := make([]Operation, 0, len(partition.Operations))
-		for _, operation := range partition.Operations {
-			operations = append(operations, Operation{
-				Operation: operation,
-				Offset:    d.dataOffset + int64(operation.GetDataOffset()),
-				Length:    operation.GetDataLength(),
-			})
-		}
-
-		var wrappedCallback func(int, int)
-		if progressCallback != nil {
-			wrappedCallback = func(completed, total int) {
-				progressPercent := float64(completed) / float64(total) * 100
-				progressInfo := ProgressInfo{
-					PartitionName:   partitionName,
-					TotalOperations: total,
-					CompletedOps:    completed,
-					ProgressPercent: progressPercent,
-				}
-				progressCallback(progressInfo)
-			}
-		}
-
-		if err := d.processOperationsToBytesWithProgress(operations, partitionData, wrappedCallback); err != nil {
-			return nil, fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToProcessPartition, partitionName, err)
-		}
-
-		result[partitionName] = partitionData
-
-		if progressCallback != nil {
-			overallProgress := float64(i+1) / float64(len(partitions)) * 100
-			progressInfo := ProgressInfo{
-				PartitionName:   partitionName,
-				TotalOperations: len(operations),
-				CompletedOps:    len(operations),
-				ProgressPercent: overallProgress,
-			}
-			progressCallback(progressInfo)
-		}
-	}
-
-	return result, nil
-}
-
-// ExtractPartitionsToBytes extracts specified partitions from the payload and returns their bytes.
-// Returns a map where keys are partition names and values are the partition data as byte slices.
-// If partitionNames is empty, all partitions will be extracted.
-func (d *Dumper) ExtractPartitionsToBytes(partitionNames []string) (map[string][]byte, error) {
-	return d.ExtractPartitionsToBytesWithProgress(partitionNames, nil)
-}
-
-// ExtractPartitionsToBytesWithProgress extracts specified partitions and returns their bytes with progress reporting.
-// Returns a map where keys are partition names and values are the partition data as byte slices.
-// If partitionNames is empty, all partitions will be extracted.
-func (d *Dumper) ExtractPartitionsToBytesWithProgress(partitionNames []string, progressCallback ProgressCallback) (map[string][]byte, error) {
-	var partitions []*metadata.PartitionUpdate
-
-	if len(partitionNames) == 0 {
-		partitions = d.manifest.Partitions
-	} else {
-		for _, imageName := range partitionNames {
-			imageName = strings.TrimSpace(imageName)
-			found := false
-			for _, partition := range d.manifest.Partitions {
-				if partition.GetPartitionName() == imageName {
-					partitions = append(partitions, partition)
-					found = true
-					break
-				}
-			}
-			if !found {
-				fmt.Printf(i18n.I18nMsg.Dumper.PartitionNotFound+"\n", imageName)
-			}
-		}
-	}
-
-	if len(partitions) == 0 {
-		fmt.Println(i18n.I18nMsg.Dumper.NotOperatingOnPartitions)
-		return make(map[string][]byte), nil
-	}
-
-	return d.extractPartitionsToBytesWithProgress(partitions, progressCallback)
 }
 
 // ExtractPartitionsDiff extracts partitions using differential OTA.
@@ -585,22 +235,6 @@ func (d *Dumper) ListPartitionsAsMap() (map[string]PartitionInfo, error) {
 	return partitionsInfo, nil
 }
 
-// GetPartitionInfo returns information for a specific partition by name.
-// Returns nil and an error if the partition is not found.
-func (d *Dumper) GetPartitionInfo(partitionName string) (*PartitionInfo, error) {
-	partitionsMap, err := d.ListPartitionsAsMap()
-	if err != nil {
-		return nil, err
-	}
-
-	info, exists := partitionsMap[partitionName]
-	if !exists {
-		return nil, fmt.Errorf(i18n.I18nMsg.Dumper.PartitionNotFound, partitionName)
-	}
-
-	return &info, nil
-}
-
 // getPartitionSizeInBytes calculates the total size of a partition in bytes
 func (d *Dumper) getPartitionSizeInBytes(partition *metadata.PartitionUpdate) uint64 {
 	var sizeInBlocks uint64
@@ -617,6 +251,75 @@ func (d *Dumper) getPartitionSizeInBytes(partition *metadata.PartitionUpdate) ui
 func (d *Dumper) shouldUseMultithread(partition *metadata.PartitionUpdate) bool {
 	sizeInBytes := d.getPartitionSizeInBytes(partition)
 	return sizeInBytes > MultithreadThreshold
+}
+
+// ShouldUseMultithread determines if a partition should be processed with multiple threads
+// based on its size compared to MultithreadThreshold
+func (d *Dumper) ShouldUseMultithread(partition *metadata.PartitionUpdate) bool {
+	return d.shouldUseMultithread(partition)
+}
+
+// MultiprocessPartitions processes partitions with specified concurrency settings
+func (d *Dumper) MultiprocessPartitions(partitions []*PartitionWithOps, outputDir string, partitionWorkers, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
+	// Convert from pointer slice to value slice for internal use
+	partitionsWithOps := make([]PartitionWithOps, len(partitions))
+	for i, p := range partitions {
+		partitionsWithOps[i] = *p
+	}
+	return d.multiprocessPartitions(partitionsWithOps, outputDir, partitionWorkers, operationWorkers, isDiff, oldDir, progressCallback)
+}
+
+// GetAllPartitionsWithOps returns all partitions with their operations
+func (d *Dumper) GetAllPartitionsWithOps() ([]*PartitionWithOps, error) {
+	partitions := make([]*PartitionWithOps, 0, len(d.manifest.Partitions))
+	for _, partition := range d.manifest.Partitions {
+		operations := make([]Operation, 0, len(partition.Operations))
+		for _, operation := range partition.Operations {
+			operations = append(operations, Operation{
+				Operation: operation,
+				Offset:    d.dataOffset + int64(operation.GetDataOffset()),
+				Length:    operation.GetDataLength(),
+			})
+		}
+		partitions = append(partitions, &PartitionWithOps{
+			Partition:  partition,
+			Operations: operations,
+		})
+	}
+	return partitions, nil
+}
+
+// GetPartitionsWithOps returns specified partitions with their operations
+func (d *Dumper) GetPartitionsWithOps(partitionNames []string) ([]*PartitionWithOps, error) {
+	partitions := make([]*PartitionWithOps, 0, len(partitionNames))
+
+	for _, imageName := range partitionNames {
+		imageName = strings.TrimSpace(imageName)
+		found := false
+		for _, partition := range d.manifest.Partitions {
+			if partition.GetPartitionName() == imageName {
+				operations := make([]Operation, 0, len(partition.Operations))
+				for _, operation := range partition.Operations {
+					operations = append(operations, Operation{
+						Operation: operation,
+						Offset:    d.dataOffset + int64(operation.GetDataOffset()),
+						Length:    operation.GetDataLength(),
+					})
+				}
+				partitions = append(partitions, &PartitionWithOps{
+					Partition:  partition,
+					Operations: operations,
+				})
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf(i18n.I18nMsg.Dumper.PartitionNotFound+"\n", imageName)
+		}
+	}
+
+	return partitions, nil
 }
 
 func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir string, partitionWorkers, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
@@ -688,6 +391,48 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 	wg.Wait()
 
 	return nil
+}
+
+// ExtractPartitionsWithStrategy extracts partitions using the specified strategy and CPU count
+func (d *Dumper) ExtractPartitionsWithStrategy(outputDir string, partitionNames []string, strategy ExtractionStrategy, cpuCount int, progressCallback ProgressCallback) error {
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
+	}
+
+	// Get all partitions or specified ones
+	var allPartitions []*PartitionWithOps
+	if len(partitionNames) == 0 {
+		partitions, err := d.GetAllPartitionsWithOps()
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToGetAllPartitions, err)
+		}
+		allPartitions = partitions
+	} else {
+		partitions, err := d.GetPartitionsWithOps(partitionNames)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToGetSpecifiedPartitions, err)
+		}
+		allPartitions = partitions
+	}
+
+	if len(allPartitions) == 0 {
+		fmt.Println(i18n.I18nMsg.Dumper.NotOperatingOnPartitions)
+		return nil
+	}
+
+	// Special optimization for single partition extraction
+	if len(allPartitions) == 1 {
+		return d.extractSinglePartitionOptimized(allPartitions[0], outputDir, cpuCount, progressCallback)
+	}
+
+	switch strategy {
+	case StrategySequential:
+		return d.extractPartitionsSequential(allPartitions, outputDir, cpuCount, progressCallback)
+	case StrategyAdaptive:
+		return d.extractPartitionsWithWorkStealing(allPartitions, outputDir, cpuCount, progressCallback)
+	default:
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorUnknownExtractionStrategy, strategy)
+	}
 }
 
 func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {

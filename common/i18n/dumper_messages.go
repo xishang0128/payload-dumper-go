@@ -38,8 +38,12 @@ type DumperMessages struct {
 	NotOperatingOnPartitions string
 
 	// Additional log/info messages
-	ErrorProcessingPartition    string
-	ErrorFailedToWritePartition string
+	ErrorProcessingPartition            string
+	ErrorFailedToWritePartition         string
+	ErrorWorkerFailedToProcessPartition string
+	ErrorUnknownExtractionStrategy      string
+	ErrorFailedToGetAllPartitions       string
+	ErrorFailedToGetSpecifiedPartitions string
 
 	// Progress related
 	Operations string
@@ -84,8 +88,12 @@ var EnglishDumperMessages = DumperMessages{
 	NotOperatingOnPartitions: "Not operating on any partitions",
 
 	// Additional log/info messages
-	ErrorProcessingPartition:    "Error processing partition %s: %v",
-	ErrorFailedToWritePartition: "Failed to write partition %s: %v",
+	ErrorProcessingPartition:            "Error processing partition %s: %v",
+	ErrorFailedToWritePartition:         "Failed to write partition %s: %v",
+	ErrorWorkerFailedToProcessPartition: "worker %d failed to process partition %s: %v",
+	ErrorUnknownExtractionStrategy:      "unknown extraction strategy: %v",
+	ErrorFailedToGetAllPartitions:       "failed to get all partitions: %v",
+	ErrorFailedToGetSpecifiedPartitions: "failed to get specified partitions: %v",
 
 	// Progress related
 	Operations: "ops",
@@ -130,8 +138,12 @@ var ChineseDumperMessages = DumperMessages{
 	NotOperatingOnPartitions: "没有分区需要处理",
 
 	// Additional log/info messages
-	ErrorProcessingPartition:    "处理分区 %s 时出错: %v",
-	ErrorFailedToWritePartition: "写入分区 %s 失败: %v",
+	ErrorProcessingPartition:            "处理分区 %s 时出错: %v",
+	ErrorFailedToWritePartition:         "写入分区 %s 失败: %v",
+	ErrorWorkerFailedToProcessPartition: "工作线程 %d 处理分区 %s 失败: %v",
+	ErrorUnknownExtractionStrategy:      "未知的提取策略: %v",
+	ErrorFailedToGetAllPartitions:       "获取所有分区失败: %v",
+	ErrorFailedToGetSpecifiedPartitions: "获取指定分区失败: %v",
 
 	// Progress related
 	Operations: "操作",
