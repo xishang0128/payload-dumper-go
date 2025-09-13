@@ -35,6 +35,13 @@ type ExtractMessages struct {
 	FailedToListPartitions   string
 	NoPartitionsFound        string
 	SelectionCancelled       string
+
+	// Total progress messages
+	TotalProgress string
+
+	// Verification results
+	VerificationAllOK  string
+	VerificationFailed string
 }
 
 // English extract messages
@@ -72,6 +79,13 @@ var EnglishExtractMessages = ExtractMessages{
 	FailedToListPartitions:   "Failed to list partitions: %v",
 	NoPartitionsFound:        "No partitions found",
 	SelectionCancelled:       "Selection cancelled: %v",
+
+	// Total progress messages
+	TotalProgress: "Total Progress",
+
+	// Verification results
+	VerificationAllOK:  "All verified",
+	VerificationFailed: "Failed files:",
 }
 
 // Chinese extract messages
@@ -109,4 +123,11 @@ var ChineseExtractMessages = ExtractMessages{
 	FailedToListPartitions:   "无法列出分区: %v",
 	NoPartitionsFound:        "未找到分区",
 	SelectionCancelled:       "选择已取消: %v",
+
+	// Total progress messages
+	TotalProgress: "总进度",
+
+	// Verification results
+	VerificationAllOK:  "全部验证通过",
+	VerificationFailed: "验证失败的文件：",
 }

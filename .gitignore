@@ -5,6 +5,7 @@ vendor/
 *output*/
 bin/
 *old*/
+*test*/
 
 payload-dumper*
 *.zip

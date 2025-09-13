@@ -23,6 +23,10 @@ type DumperMessages struct {
 	ErrorFailedToExtractMetadata   string
 	ErrorFailedToReadMetadata      string
 
+	// Verification related
+	ErrorNoExpectedHashInManifest string
+	ErrorSha256Mismatch           string
+
 	// Additional internal errors
 	ErrorFailedToProcessPartition      string
 	ErrorSourceCopyNotSupportedInBytes string
@@ -65,6 +69,10 @@ var EnglishDumperMessages = DumperMessages{
 	ErrorFailedToExtractMetadata:   "failed to extract %s: %v",
 	ErrorFailedToReadMetadata:      "failed to read metadata: %v",
 
+	// Verification related
+	ErrorNoExpectedHashInManifest: "no expected hash in manifest",
+	ErrorSha256Mismatch:           "sha256 mismatch: expected %x got %x",
+
 	// Additional internal errors
 	ErrorFailedToProcessPartition:      "failed to process partition %s: %v",
 	ErrorSourceCopyNotSupportedInBytes: "SOURCE_COPY operation not supported in bytes mode",
@@ -106,6 +114,10 @@ var ChineseDumperMessages = DumperMessages{
 	ErrorFailedToWriteZeros:        "写入零值失败: %v",
 	ErrorFailedToExtractMetadata:   "提取%s失败: %v",
 	ErrorFailedToReadMetadata:      "读取元数据失败: %v",
+
+	// Verification related
+	ErrorNoExpectedHashInManifest: "清单中没有预期的哈希值",
+	ErrorSha256Mismatch:           "sha256 不匹配：期望 %x 实际 %x",
 
 	// Additional internal errors
 	ErrorFailedToProcessPartition:      "处理分区 %s 失败: %v",

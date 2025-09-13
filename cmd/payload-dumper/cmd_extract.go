@@ -12,6 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"path/filepath"
 	"sync"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -23,6 +27,18 @@ import (
 	"github.com/xishang0128/payload-dumper-go/dumper"
 )
 
+const (
+	defaultMaxBufferMB    = 64
+	defaultVerifyBufSize  = 4 * 1024 * 1024
+	minVerifyBufSize      = 64 * 1024
+	defaultProgressWidth  = 60
+	defaultPageSize       = 15
+	httpTimeout           = 300 * time.Second
+	verifyJobsBuffer      = 128
+	maxPartitionNameLen   = 24
+	partitionNameTruncate = 21
+)
+
 var (
 	extractOut           string
 	extractPartitions    string
@@ -30,14 +46,13 @@ var (
 	extractUseBuffer     bool
 	extractHTTPWorkers   int
 	extractHTTPCacheSize string
-	// New flags for profiling and memory tuning
-	extractPprofAddr   string
-	extractHeapProfile string
-	extractMaxBufferMB int
+	extractVerify        bool
+	extractPprofAddr     string
+	extractHeapProfile   string
+	extractMaxBufferMB   int
 )
 
 func initExtractCmd() {
-	// Initialize extract command with localized strings
 	extractCmd := &cobra.Command{
 		Use:   i18n.I18nMsg.Extract.Use,
 		Short: i18n.I18nMsg.Extract.Short,
@@ -49,115 +64,45 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
+	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
 	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
 	extractCmd.Flags().StringVar(&extractHTTPCacheSize, "http-cache-size", "", i18n.I18nMsg.Extract.FlagHTTPCacheSize)
-	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
+	extractCmd.Flags().IntVar(&extractMaxBufferMB, "max-buffer-mb", defaultMaxBufferMB, i18n.I18nMsg.Extract.FlagMaxBufferMB)
 	extractCmd.Flags().StringVar(&extractPprofAddr, "pprof-addr", "", i18n.I18nMsg.Extract.FlagPprofAddr)
 	extractCmd.Flags().StringVar(&extractHeapProfile, "heap-profile", "", i18n.I18nMsg.Extract.FlagHeapProfile)
-	extractCmd.Flags().IntVar(&extractMaxBufferMB, "max-buffer-mb", 64, i18n.I18nMsg.Extract.FlagMaxBufferMB)
+	extractCmd.Flags().BoolVar(&extractVerify, "verify", false, "verify partition sha256 after extraction")
 
 	rootCmd.AddCommand(extractCmd)
 }
 
 func runExtract(cmd *cobra.Command, args []string) {
 	start := time.Now()
-	defer func() {
-		elapsed := time.Since(start)
-		fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
-	}()
+	defer printElapsedTime(start)
+
 	payloadFile := args[0]
 
-	// Apply MaxBufferSize from flag (convert MB to bytes)
-	if extractMaxBufferMB <= 0 {
-		extractMaxBufferMB = 64
-	}
-	// set dumper MaxBufferSize (int bytes)
-	dumper.MaxBufferSize = int64(extractMaxBufferMB) * 1024 * 1024
+	setupExtractionConfig()
+	pprofServer := startPprofServer()
+	defer stopPprofServer(pprofServer)
 
-	// Start pprof server if requested
-	var pprofServer *http.Server
-	if extractPprofAddr != "" {
-		pprofServer = &http.Server{Addr: extractPprofAddr}
-		go func() {
-			// _ = http.ListenAndServe(extractPprofAddr, nil) // pprof already registered by import
-			if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("pprof server error: %v", err)
-			}
-		}()
-		log.Printf("pprof server started at %s", extractPprofAddr)
+	partitionNames, err := selectPartitions(payloadFile)
+	if err != nil {
+		log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
 	}
 
-	var (
-		partitionNames []string
-		err            error
-	)
-	if extractPartitions != "" {
-		partitionNames = strings.Split(extractPartitions, ",")
-		for i, name := range partitionNames {
-			partitionNames[i] = strings.TrimSpace(name)
-		}
-	} else {
-		partitionNames, err = selectPartitionsInteractively(payloadFile)
-		if err != nil {
-			log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
-		}
-	}
+	configureHTTPClient()
 
-	file.SetHTTPClientTimeout(300 * time.Second)
-	// Apply HTTP concurrent request limit if provided (0 = unlimited)
-	file.SetHTTPMaxConcurrentRequests(extractHTTPWorkers)
-	if extractHTTPCacheSize != "" {
-		if v, err := parseSizeString(extractHTTPCacheSize); err == nil {
-			file.SetHTTPReadCacheSize(v)
-		} else {
-			log.Fatalf(i18n.I18nMsg.Extract.ErrorInvalidHTTPCacheSize, err)
-		}
-	}
-	// Create dumper
 	d, err := createDumper(payloadFile)
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
-	defer func() {
-		if d != nil {
-			_ = d.Close()
-		}
-	}()
+	defer closeDumper(d)
 
-	// Extract partitions with progress rendered in cmd layer
-	progress := mpb.New(mpb.WithWidth(60))
-	bars := make(map[string]*mpb.Bar)
-	var barsMu sync.Mutex
+	progress := mpb.New(mpb.WithWidth(defaultProgressWidth))
+	progressManager := newProgressManager(progress)
+	verificationManager := setupVerificationManager(d)
 
-	progressCallback := func(pi dumper.ProgressInfo) {
-		barsMu.Lock()
-		defer barsMu.Unlock()
-		// create bar if not exists
-		if _, ok := bars[pi.PartitionName]; !ok {
-			partitionDesc := fmt.Sprintf("[%s](%s)", pi.PartitionName, pi.SizeReadable)
-			bar := progress.AddBar(int64(pi.TotalOperations),
-				mpb.PrependDecorators(
-					decor.Name(partitionDesc, decor.WCSyncSpaceR),
-				),
-				mpb.AppendDecorators(
-					decor.Percentage(decor.WC{W: 5}),
-					decor.Counters(0, " | %d/%d"),
-					decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 6}, decor.WCSyncSpace),
-					decor.AverageSpeed(0, fmt.Sprintf(" | %%.2f %s", i18n.I18nMsg.Dumper.OpsSuffix)),
-				),
-			)
-			bars[pi.PartitionName] = bar
-		}
-		bar := bars[pi.PartitionName]
-		// set bar current
-		cur := int64(pi.CompletedOps)
-		if cur > 0 {
-			delta := cur - bar.Current()
-			if delta > 0 {
-				bar.IncrBy(int(delta))
-			}
-		}
-	}
+	progressCallback := createProgressCallback(progressManager, verificationManager)
 
 	if err := d.ExtractPartitionsWithOptionsAndProgress(extractOut, partitionNames, extractWorkers, extractUseBuffer, progressCallback); err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.ErrorFailedToExtract, err)
@@ -165,85 +110,564 @@ func runExtract(cmd *cobra.Command, args []string) {
 
 	progress.Wait()
 
-	// Optionally write heap profile after extraction
-	if extractHeapProfile != "" {
-		f, err := os.Create(extractHeapProfile)
-		if err != nil {
-			log.Printf("failed to create heap profile file: %v", err)
-		} else {
-			runtime.GC() // get up-to-date statistics
-			if err := pprof.WriteHeapProfile(f); err != nil {
-				log.Printf("failed to write heap profile: %v", err)
-			}
-			f.Close()
-			log.Printf("heap profile written to %s", extractHeapProfile)
-		}
-	}
-
-	// Shutdown pprof server if it was started
-	if pprofServer != nil {
-		_ = pprofServer.Close()
-	}
+	handleVerificationResults(verificationManager)
+	writeHeapProfile()
 
 	fmt.Println(i18n.I18nMsg.Extract.ExtractionCompleted)
 }
 
-// selectPartitionsInteractively shows an interactive partition selector using survey
-func selectPartitionsInteractively(p string) ([]string, error) {
-	d, err := createDumper(p)
-	if err != nil {
-		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
+func printElapsedTime(start time.Time) {
+	elapsed := time.Since(start)
+	fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
+}
+
+func setupExtractionConfig() {
+	if extractMaxBufferMB <= 0 {
+		extractMaxBufferMB = defaultMaxBufferMB
 	}
-	defer func() {
-		if d != nil {
-			_ = d.Close()
+	dumper.MaxBufferSize = int64(extractMaxBufferMB) * 1024 * 1024
+}
+
+// startPprofServer starts the pprof server if requested
+func startPprofServer() *http.Server {
+	if extractPprofAddr == "" {
+		return nil
+	}
+
+	server := &http.Server{Addr: extractPprofAddr}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("pprof server error: %v", err)
 		}
 	}()
+	log.Printf("pprof server started at %s", extractPprofAddr)
+	return server
+}
+
+// stopPprofServer stops the pprof server if it was started
+func stopPprofServer(server *http.Server) {
+	if server != nil {
+		_ = server.Close()
+	}
+}
+
+// selectPartitions selects partitions either from flags or interactively
+func selectPartitions(payloadFile string) ([]string, error) {
+	if extractPartitions != "" {
+		partitionNames := strings.Split(extractPartitions, ",")
+		for i, name := range partitionNames {
+			partitionNames[i] = strings.TrimSpace(name)
+		}
+		return partitionNames, nil
+	}
+
+	return selectPartitionsInteractively(payloadFile)
+}
+
+// configureHTTPClient sets up HTTP client parameters
+func configureHTTPClient() {
+	file.SetHTTPClientTimeout(httpTimeout)
+	file.SetHTTPMaxConcurrentRequests(extractHTTPWorkers)
+
+	if extractHTTPCacheSize != "" {
+		if v, err := parseSizeString(extractHTTPCacheSize); err == nil {
+			file.SetHTTPReadCacheSize(v)
+		} else {
+			log.Fatalf(i18n.I18nMsg.Extract.ErrorInvalidHTTPCacheSize, err)
+		}
+	}
+}
+
+// closeDumper safely closes the dumper
+func closeDumper(d *dumper.Dumper) {
+	if d != nil {
+		_ = d.Close()
+	}
+}
+
+type progressManager struct {
+	progress            *mpb.Progress
+	bars                map[string]*mpb.Bar
+	completedBars       map[string]struct{}
+	mu                  sync.Mutex
+	totalBar            *mpb.Bar
+	partitionTotals     map[string]int
+	partitionCurrent    map[string]int
+	totalOps            int64
+	totalCompleted      int64
+	activeOps           int64
+	activeCompleted     int64
+	totalStartTime      time.Time
+	partitionStartTimes map[string]time.Time
+
+	speedWindow     []speedSample
+	speedWindowSize int
+	lastUpdateTime  time.Time
+}
+
+type speedSample struct {
+	timestamp time.Time
+	ops       int64
+}
+
+func newProgressManager(progress *mpb.Progress) *progressManager {
+	now := time.Now()
+	pm := &progressManager{
+		progress:            progress,
+		bars:                make(map[string]*mpb.Bar),
+		completedBars:       make(map[string]struct{}),
+		partitionTotals:     make(map[string]int),
+		partitionCurrent:    make(map[string]int),
+		totalStartTime:      now,
+		partitionStartTimes: make(map[string]time.Time),
+		speedWindow:         make([]speedSample, 0, 20),
+		speedWindowSize:     5,
+		lastUpdateTime:      now,
+	}
+
+	pm.totalBar = progress.AddBar(0,
+		mpb.BarRemoveOnComplete(),
+		mpb.PrependDecorators(
+			decor.Name(i18n.I18nMsg.Extract.TotalProgress, decor.WCSyncSpaceR),
+		),
+		mpb.AppendDecorators(
+			decor.Percentage(decor.WC{W: 5}),
+			decor.Counters(0, " | %d/%d"),
+			decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 6}, decor.WCSyncSpace),
+			decor.Any(func(st decor.Statistics) string {
+				currentSpeed := pm.getCurrentTotalSpeed()
+				return fmt.Sprintf(" | %.2f %s", currentSpeed, i18n.I18nMsg.Dumper.OpsSuffix)
+			}, decor.WC{W: 20}),
+		),
+	)
+
+	return pm
+}
+
+func (pm *progressManager) getCurrentTotalSpeed() float64 {
+	now := time.Now()
+
+	cutoff := now.Add(-time.Duration(pm.speedWindowSize) * time.Second)
+	i := 0
+	for i < len(pm.speedWindow) && pm.speedWindow[i].timestamp.Before(cutoff) {
+		i++
+	}
+	if i > 0 {
+		pm.speedWindow = pm.speedWindow[i:]
+	}
+
+	if len(pm.speedWindow) < 2 {
+		return 0.0
+	}
+
+	oldest := pm.speedWindow[0]
+	newest := pm.speedWindow[len(pm.speedWindow)-1]
+
+	timeDiff := newest.timestamp.Sub(oldest.timestamp)
+	if timeDiff.Seconds() <= 0 {
+		return 0.0
+	}
+
+	opsDiff := newest.ops - oldest.ops
+	return float64(opsDiff) / timeDiff.Seconds()
+}
+
+func (pm *progressManager) updateSpeedWindow() {
+	now := time.Now()
+
+	if now.Sub(pm.lastUpdateTime) < 100*time.Millisecond {
+		return
+	}
+
+	pm.lastUpdateTime = now
+
+	sample := speedSample{
+		timestamp: now,
+		ops:       pm.totalCompleted,
+	}
+	pm.speedWindow = append(pm.speedWindow, sample)
+
+	if len(pm.speedWindow) > 50 {
+		pm.speedWindow = pm.speedWindow[len(pm.speedWindow)-50:]
+	}
+}
+
+// verificationManager manages partition verification
+type verificationManager struct {
+	enabled       bool
+	jobs          chan string
+	wg            sync.WaitGroup
+	results       map[string]error
+	resultsMu     sync.Mutex
+	partitionsMap map[string]dumper.PartitionInfo
+}
+
+// setupVerificationManager sets up verification if enabled
+func setupVerificationManager(d *dumper.Dumper) *verificationManager {
+	vm := &verificationManager{
+		enabled: extractVerify,
+		results: make(map[string]error),
+	}
+
+	if !extractVerify {
+		return vm
+	}
+
+	// Get partition map for verification
+	pm, err := d.ListPartitionsAsMap()
+	if err != nil {
+		log.Fatalf(i18n.I18nMsg.Extract.FailedToListPartitions+": %v", err)
+	}
+	vm.partitionsMap = pm
+	vm.jobs = make(chan string, verifyJobsBuffer)
+
+	// Start verification workers
+	bufSize := calculateVerifyBufferSize()
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go vm.verificationWorker(bufSize)
+	}
+
+	return vm
+}
+
+// calculateVerifyBufferSize determines the optimal buffer size for verification
+func calculateVerifyBufferSize() int {
+	bufSize := defaultVerifyBufSize
+	if dumper.MaxBufferSize > 0 {
+		if dumper.MaxBufferSize < int64(bufSize) {
+			if dumper.MaxBufferSize < minVerifyBufSize {
+				bufSize = minVerifyBufSize
+			} else {
+				bufSize = int(dumper.MaxBufferSize)
+			}
+		}
+	}
+	return bufSize
+}
+
+// verificationWorker processes verification jobs
+func (vm *verificationManager) verificationWorker(bufSize int) {
+	buf := make([]byte, bufSize)
+	for partName := range vm.jobs {
+		err := vm.verifyPartition(partName, buf)
+		vm.resultsMu.Lock()
+		vm.results[partName] = err
+		vm.resultsMu.Unlock()
+		vm.wg.Done()
+	}
+}
+
+// verifyPartition verifies a single partition
+func (vm *verificationManager) verifyPartition(partName string, buf []byte) error {
+	expectedHex := ""
+	if info, ok := vm.partitionsMap[partName]; ok {
+		expectedHex = info.Hash
+	}
+
+	if expectedHex == "" {
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorNoExpectedHashInManifest)
+	}
+
+	path := filepath.Join(extractOut, partName+".img")
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.CopyBuffer(h, f, buf); err != nil {
+		return err
+	}
+
+	sum := h.Sum(nil)
+	gotHex := hex.EncodeToString(sum)
+	if gotHex != expectedHex {
+		expBytes, _ := hex.DecodeString(expectedHex)
+		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorSha256Mismatch, expBytes, sum)
+	}
+
+	return nil
+}
+
+// createProgressCallback creates the progress callback function
+func createProgressCallback(pm *progressManager, vm *verificationManager) func(dumper.ProgressInfo) {
+	return func(pi dumper.ProgressInfo) {
+		pm.updateProgress(pi)
+
+		// Enqueue verification if needed
+		if vm.enabled && pi.CompletedOps > 0 && pi.CompletedOps == pi.TotalOperations {
+			vm.wg.Add(1)
+			vm.jobs <- pi.PartitionName
+		}
+	}
+}
+
+// updateProgress updates the progress bar for a partition
+func (pm *progressManager) updateProgress(pi dumper.ProgressInfo) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	// Create bar if not exists
+	if _, ok := pm.bars[pi.PartitionName]; !ok {
+		pm.createProgressBar(pi)
+	}
+
+	bar := pm.bars[pi.PartitionName]
+
+	// Update bar progress
+	cur := int64(pi.CompletedOps)
+	if cur > 0 {
+		delta := cur - bar.Current()
+		if delta > 0 {
+			bar.IncrBy(int(delta))
+		}
+	}
+
+	// Update total progress
+	pm.updateTotalProgress(pi.PartitionName, pi.CompletedOps)
+
+	// Remove completed bars
+	if pi.CompletedOps > 0 && pi.CompletedOps == pi.TotalOperations {
+		pm.removeCompletedBar(pi.PartitionName, bar)
+	}
+}
+
+func (pm *progressManager) updateTotalProgress(partitionName string, completedOps int) {
+	if pm.totalBar == nil || len(pm.partitionTotals) == 0 {
+		return
+	}
+
+	prevCompleted := pm.partitionCurrent[partitionName]
+	pm.partitionCurrent[partitionName] = completedOps
+
+	// Update total completed operations
+	delta := completedOps - prevCompleted
+	if delta > 0 {
+		pm.totalCompleted += int64(delta)
+
+		// Only update active progress for non-completed partitions
+		if _, completed := pm.completedBars[partitionName]; !completed {
+			pm.activeCompleted += int64(delta)
+		}
+	}
+
+	// Update speed window for real-time speed calculation
+	pm.updateSpeedWindow()
+
+	// Calculate actual completed operations across all partitions (weighted by size)
+	var actualCompleted int64
+	for partName, total := range pm.partitionTotals {
+		if total > 0 {
+			current := pm.partitionCurrent[partName]
+			if current > total {
+				current = total // Cap at maximum
+			}
+			actualCompleted += int64(current)
+		}
+	}
+
+	// Update progress bar to reflect actual completion
+	if actualCompleted > pm.totalBar.Current() {
+		deltaProgress := actualCompleted - pm.totalBar.Current()
+		pm.totalBar.IncrBy(int(deltaProgress))
+	}
+}
+
+func (pm *progressManager) createProgressBar(pi dumper.ProgressInfo) {
+	name := pi.PartitionName
+	if len(name) > maxPartitionNameLen {
+		name = name[:partitionNameTruncate] + "..."
+	}
+
+	partitionDesc := fmt.Sprintf("[%s](%s)", name, pi.SizeReadable)
+	bar := pm.progress.AddBar(int64(pi.TotalOperations),
+		mpb.BarRemoveOnComplete(),
+		mpb.PrependDecorators(
+			decor.Name(partitionDesc, decor.WCSyncSpaceR),
+		),
+		mpb.AppendDecorators(
+			decor.Percentage(decor.WC{W: 5}),
+			decor.Counters(0, " | %d/%d"),
+			decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 6}, decor.WCSyncSpace),
+			decor.AverageSpeed(0, fmt.Sprintf(" | %%.2f %s", i18n.I18nMsg.Dumper.OpsSuffix)),
+		),
+	)
+	pm.bars[pi.PartitionName] = bar
+
+	// Record start time for this partition
+	pm.partitionStartTimes[pi.PartitionName] = time.Now()
+
+	// Only add to total if this partition is new
+	if _, exists := pm.partitionTotals[pi.PartitionName]; !exists {
+		pm.partitionTotals[pi.PartitionName] = pi.TotalOperations
+		pm.totalOps += int64(pi.TotalOperations)
+		pm.activeOps += int64(pi.TotalOperations)
+
+		if pm.totalBar != nil {
+			pm.totalBar.SetTotal(pm.totalOps, false)
+		}
+	}
+}
+
+func (pm *progressManager) removeCompletedBar(partitionName string, bar *mpb.Bar) {
+	if _, seen := pm.completedBars[partitionName]; !seen {
+		pm.completedBars[partitionName] = struct{}{}
+		if bar != nil {
+			bar.Abort(true)
+			delete(pm.bars, partitionName)
+		}
+
+		// Remove from active operations count
+		if total, exists := pm.partitionTotals[partitionName]; exists {
+			pm.activeOps -= int64(total)
+			current := pm.partitionCurrent[partitionName]
+			pm.activeCompleted -= int64(current)
+		}
+
+		// Check if all partitions are completed
+		if len(pm.completedBars) == len(pm.partitionTotals) && pm.totalBar != nil {
+			// Complete the total progress bar and trigger removal
+			if pm.totalBar.Current() < pm.totalOps {
+				remaining := pm.totalOps - pm.totalBar.Current()
+				pm.totalBar.IncrBy(int(remaining))
+			}
+			// Force completion to trigger BarRemoveOnComplete
+			pm.totalBar.SetTotal(pm.totalOps, true)
+		}
+	}
+}
+
+func handleVerificationResults(vm *verificationManager) {
+	if !vm.enabled {
+		return
+	}
+
+	close(vm.jobs)
+	vm.wg.Wait()
+
+	fmt.Println("\nVerification results:")
+	vm.resultsMu.Lock()
+	defer vm.resultsMu.Unlock()
+
+	var failed []string
+	for part, err := range vm.results {
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s: %v", part, err))
+		}
+	}
+
+	if len(failed) == 0 {
+		fmt.Println(i18n.I18nMsg.Extract.VerificationAllOK)
+	} else {
+		fmt.Println(i18n.I18nMsg.Extract.VerificationFailed)
+		for _, line := range failed {
+			fmt.Println(line)
+		}
+	}
+}
+
+func writeHeapProfile() {
+	if extractHeapProfile == "" {
+		return
+	}
+
+	f, err := os.Create(extractHeapProfile)
+	if err != nil {
+		log.Printf("failed to create heap profile file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	runtime.GC()
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		log.Printf("failed to write heap profile: %v", err)
+		return
+	}
+
+	log.Printf("heap profile written to %s", extractHeapProfile)
+}
+
+func selectPartitionsInteractively(payloadFile string) ([]string, error) {
+	d, err := createDumper(payloadFile)
+	if err != nil {
+		return nil, fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper+": %v", err)
+	}
+	defer closeDumper(d)
+
 	partitions, err := d.ListPartitions()
 	if err != nil {
-		return nil, fmt.Errorf(i18n.I18nMsg.Extract.FailedToListPartitions, err)
+		return nil, fmt.Errorf(i18n.I18nMsg.Extract.FailedToListPartitions+": %v", err)
 	}
 
 	if len(partitions) == 0 {
 		return nil, fmt.Errorf(i18n.I18nMsg.Extract.NoPartitionsFound)
 	}
 
-	var options []string
-	for i, partition := range partitions {
-		options = append(options, fmt.Sprintf("%d. %s (%s)", i+1, partition.PartitionName, partition.SizeReadable))
-	}
-
-	prompt := &survey.MultiSelect{
-		Message:  i18n.I18nMsg.Extract.InteractiveSelection,
-		Options:  options,
-		Default:  nil,
-		PageSize: 15,
-	}
-
-	var result []string
-	err = survey.AskOne(prompt, &result)
+	options := createPartitionOptions(partitions)
+	selectedOptions, err := showPartitionSelectionPrompt(options)
 	if err != nil {
-		return nil, fmt.Errorf(i18n.I18nMsg.Extract.SelectionCancelled, err)
+		return nil, err
 	}
 
-	var selectedPartitions []string
-	for _, selection := range result {
-		parts := strings.SplitN(selection, ". ", 2)
-		if len(parts) >= 2 {
-			nameAndSize := parts[1]
-			nameParts := strings.Split(nameAndSize, " ")
-			if len(nameParts) >= 1 {
-				partitionName := nameParts[0]
-				selectedPartitions = append(selectedPartitions, partitionName)
-			}
-		}
-	}
+	selectedPartitions := parseSelectedPartitions(selectedOptions)
 
 	if len(selectedPartitions) == 0 {
 		return nil, fmt.Errorf(i18n.I18nMsg.Extract.NoPartitionsSelected)
 	}
 
 	return selectedPartitions, nil
+}
+
+func createPartitionOptions(partitions []dumper.PartitionInfo) []string {
+	options := make([]string, 0, len(partitions))
+	for i, partition := range partitions {
+		option := fmt.Sprintf("%d. %s (%s)", i+1, partition.PartitionName, partition.SizeReadable)
+		options = append(options, option)
+	}
+	return options
+}
+
+func showPartitionSelectionPrompt(options []string) ([]string, error) {
+	prompt := &survey.MultiSelect{
+		Message:  i18n.I18nMsg.Extract.InteractiveSelection,
+		Options:  options,
+		Default:  nil,
+		PageSize: defaultPageSize,
+	}
+
+	var result []string
+	err := survey.AskOne(prompt, &result)
+	if err != nil {
+		return nil, fmt.Errorf(i18n.I18nMsg.Extract.SelectionCancelled+": %v", err)
+	}
+
+	return result, nil
+}
+
+func parseSelectedPartitions(selectedOptions []string) []string {
+	var partitions []string
+	for _, selection := range selectedOptions {
+		if partitionName := extractPartitionName(selection); partitionName != "" {
+			partitions = append(partitions, partitionName)
+		}
+	}
+	return partitions
+}
+
+func extractPartitionName(option string) string {
+	parts := strings.SplitN(option, ". ", 2)
+	if len(parts) < 2 {
+		return ""
+	}
+
+	nameAndSize := parts[1]
+	nameParts := strings.Split(nameAndSize, " ")
+	if len(nameParts) == 0 {
+		return ""
+	}
+
+	return nameParts[0]
 }
 
 func createDumper(p string) (*dumper.Dumper, error) {
@@ -264,8 +688,7 @@ func createDumper(p string) (*dumper.Dumper, error) {
 	return dumper.New(reader)
 }
 
-// parseSizeString parses a human-friendly size string like "4M", "256K", "1G" into bytes.
-// Supports suffixes: K, M, G (case-insensitive). No suffix or empty string returns 0.
+// parseSizeString parses size strings like "4M", "256K", "1G" into bytes
 func parseSizeString(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
