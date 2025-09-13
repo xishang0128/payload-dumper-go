@@ -619,6 +619,75 @@ func (d *Dumper) shouldUseMultithread(partition *metadata.PartitionUpdate) bool 
 	return sizeInBytes > MultithreadThreshold
 }
 
+// ShouldUseMultithread determines if a partition should be processed with multiple threads
+// based on its size compared to MultithreadThreshold
+func (d *Dumper) ShouldUseMultithread(partition *metadata.PartitionUpdate) bool {
+	return d.shouldUseMultithread(partition)
+}
+
+// MultiprocessPartitions processes partitions with specified concurrency settings
+func (d *Dumper) MultiprocessPartitions(partitions []*PartitionWithOps, outputDir string, partitionWorkers, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
+	// Convert from pointer slice to value slice for internal use
+	partitionsWithOps := make([]PartitionWithOps, len(partitions))
+	for i, p := range partitions {
+		partitionsWithOps[i] = *p
+	}
+	return d.multiprocessPartitions(partitionsWithOps, outputDir, partitionWorkers, operationWorkers, isDiff, oldDir, progressCallback)
+}
+
+// GetAllPartitionsWithOps returns all partitions with their operations
+func (d *Dumper) GetAllPartitionsWithOps() ([]*PartitionWithOps, error) {
+	partitions := make([]*PartitionWithOps, 0, len(d.manifest.Partitions))
+	for _, partition := range d.manifest.Partitions {
+		operations := make([]Operation, 0, len(partition.Operations))
+		for _, operation := range partition.Operations {
+			operations = append(operations, Operation{
+				Operation: operation,
+				Offset:    d.dataOffset + int64(operation.GetDataOffset()),
+				Length:    operation.GetDataLength(),
+			})
+		}
+		partitions = append(partitions, &PartitionWithOps{
+			Partition:  partition,
+			Operations: operations,
+		})
+	}
+	return partitions, nil
+}
+
+// GetPartitionsWithOps returns specified partitions with their operations
+func (d *Dumper) GetPartitionsWithOps(partitionNames []string) ([]*PartitionWithOps, error) {
+	partitions := make([]*PartitionWithOps, 0, len(partitionNames))
+
+	for _, imageName := range partitionNames {
+		imageName = strings.TrimSpace(imageName)
+		found := false
+		for _, partition := range d.manifest.Partitions {
+			if partition.GetPartitionName() == imageName {
+				operations := make([]Operation, 0, len(partition.Operations))
+				for _, operation := range partition.Operations {
+					operations = append(operations, Operation{
+						Operation: operation,
+						Offset:    d.dataOffset + int64(operation.GetDataOffset()),
+						Length:    operation.GetDataLength(),
+					})
+				}
+				partitions = append(partitions, &PartitionWithOps{
+					Partition:  partition,
+					Operations: operations,
+				})
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf(i18n.I18nMsg.Dumper.PartitionNotFound+"\n", imageName)
+		}
+	}
+
+	return partitions, nil
+}
+
 func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir string, partitionWorkers, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
 	if partitionWorkers <= 0 {
 		partitionWorkers = runtime.NumCPU()

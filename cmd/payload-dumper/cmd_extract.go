@@ -40,19 +40,21 @@ const (
 )
 
 var (
-	extractOut              string
-	extractPartitions       string
-	extractAll              bool // Extract all partitions
-	extractWorkers          int  // Number of worker threads per partition (for processing operations within a single partition)
-	extractPartitionWorkers int  // Number of partitions to process concurrently
-	extractUseBuffer        bool
-	extractHTTPWorkers      int
-	extractHTTPCacheSize    string
-	extractVerify           bool
-	extractPprofAddr        string
-	extractHeapProfile      string
-	extractMaxBufferMB      int
-	extractMultithreadMB    int // Partition size threshold (in MB) for multi-threading
+	extractOut                      string
+	extractPartitions               string
+	extractAll                      bool // Extract all partitions
+	extractLargePartitionWorkers    int  // Number of large partitions to process concurrently
+	extractSmallPartitionWorkers    int  // Number of small partitions to process concurrently
+	extractLargePartitionThreads    int  // Number of worker threads per large partition
+	extractSmallPartitionThreads    int  // Number of worker threads per small partition
+	extractUseBuffer                bool
+	extractHTTPWorkers              int
+	extractHTTPCacheSize            string
+	extractVerify                   bool
+	extractPprofAddr                string
+	extractHeapProfile              string
+	extractMaxBufferMB              int
+	extractPartitionSizeThresholdMB int // Partition size threshold (in MB) to distinguish between large and small partitions
 )
 
 func initExtractCmd() {
@@ -67,13 +69,15 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractOut, "out", "o", "output", i18n.I18nMsg.Common.FlagOut)
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().BoolVarP(&extractAll, "all", "a", false, i18n.I18nMsg.Extract.FlagAll)
-	extractCmd.Flags().IntVarP(&extractWorkers, "workers", "w", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagWorkers)
-	extractCmd.Flags().IntVar(&extractPartitionWorkers, "partition-workers", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagPartitionWorkers)
+	extractCmd.Flags().IntVar(&extractLargePartitionWorkers, "large-partition-workers", 1, i18n.I18nMsg.Extract.FlagLargePartitionWorkers)
+	extractCmd.Flags().IntVar(&extractSmallPartitionWorkers, "small-partition-workers", 2, i18n.I18nMsg.Extract.FlagSmallPartitionWorkers)
+	extractCmd.Flags().IntVar(&extractLargePartitionThreads, "large-partition-threads", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagLargePartitionThreads)
+	extractCmd.Flags().IntVar(&extractSmallPartitionThreads, "small-partition-threads", 1, i18n.I18nMsg.Extract.FlagSmallPartitionThreads)
 	extractCmd.Flags().BoolVarP(&extractUseBuffer, "buffer", "b", false, i18n.I18nMsg.Common.FlagBuffer)
 	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
 	extractCmd.Flags().StringVar(&extractHTTPCacheSize, "http-cache-size", "", i18n.I18nMsg.Extract.FlagHTTPCacheSize)
 	extractCmd.Flags().IntVar(&extractMaxBufferMB, "max-buffer-mb", defaultMaxBufferMB, i18n.I18nMsg.Extract.FlagMaxBufferMB)
-	extractCmd.Flags().IntVar(&extractMultithreadMB, "multithread-threshold-mb", 128, i18n.I18nMsg.Extract.FlagMultithreadThresholdMB)
+	extractCmd.Flags().IntVar(&extractPartitionSizeThresholdMB, "partition-size-threshold-mb", 128, i18n.I18nMsg.Extract.FlagPartitionSizeThresholdMB)
 	extractCmd.Flags().StringVar(&extractPprofAddr, "pprof-addr", "", i18n.I18nMsg.Extract.FlagPprofAddr)
 	extractCmd.Flags().StringVar(&extractHeapProfile, "heap-profile", "", i18n.I18nMsg.Extract.FlagHeapProfile)
 	extractCmd.Flags().BoolVar(&extractVerify, "verify", false, i18n.I18nMsg.Extract.FlagVerify)
@@ -88,6 +92,7 @@ func runExtract(cmd *cobra.Command, args []string) {
 	payloadFile := args[0]
 
 	setupExtractionConfig()
+	setupPartitionConfig()
 	pprofServer := startPprofServer()
 	defer stopPprofServer(pprofServer)
 
@@ -99,7 +104,7 @@ func runExtract(cmd *cobra.Command, args []string) {
 	}
 	defer closeDumper(d)
 
-	partitionNames, err := getPartitionNames(payloadFile, d)
+	partitionNames, err := getPartitionNames(payloadFile)
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.FailedToSelectPartitions, err)
 	}
@@ -110,7 +115,7 @@ func runExtract(cmd *cobra.Command, args []string) {
 
 	progressCallback := createProgressCallback(progressManager, verificationManager)
 
-	if err := d.ExtractPartitionsWithFullOptions(extractOut, partitionNames, extractPartitionWorkers, extractWorkers, extractUseBuffer, progressCallback); err != nil {
+	if err := extractPartitionsWithSizeBasedOptions(d, extractOut, partitionNames, progressCallback); err != nil {
 		log.Fatalf(i18n.I18nMsg.Extract.ErrorFailedToExtract, err)
 	}
 
@@ -133,11 +138,11 @@ func setupExtractionConfig() {
 	}
 	dumper.MaxBufferSize = int64(extractMaxBufferMB) * 1024 * 1024
 
-	// Set multithread threshold (0 means always use multi-threading)
-	if extractMultithreadMB < 0 {
-		extractMultithreadMB = 128 // Default to 128MB
+	// Set partition size threshold for distinguishing between large and small partitions
+	if extractPartitionSizeThresholdMB < 0 {
+		extractPartitionSizeThresholdMB = 128 // Default to 128MB
 	}
-	dumper.SetMultithreadThreshold(uint64(extractMultithreadMB) * 1024 * 1024)
+	dumper.SetMultithreadThreshold(uint64(extractPartitionSizeThresholdMB) * 1024 * 1024)
 }
 
 // startPprofServer starts the pprof server if requested
@@ -163,21 +168,8 @@ func stopPprofServer(server *http.Server) {
 	}
 }
 
-// selectPartitions selects partitions either from flags or interactively
-func selectPartitions(payloadFile string) ([]string, error) {
-	if extractPartitions != "" {
-		partitionNames := strings.Split(extractPartitions, ",")
-		for i, name := range partitionNames {
-			partitionNames[i] = strings.TrimSpace(name)
-		}
-		return partitionNames, nil
-	}
-
-	return selectPartitionsInteractively(payloadFile)
-}
-
 // getPartitionNames gets partition names either from flags, all partitions, or interactively
-func getPartitionNames(payloadFile string, d *dumper.Dumper) ([]string, error) {
+func getPartitionNames(payloadFile string) ([]string, error) {
 	if extractAll {
 		return []string{}, nil
 	}
@@ -756,4 +748,170 @@ func parseSizeString(s string) (int64, error) {
 
 	bytes := int64(v * float64(multiplier))
 	return bytes, nil
+}
+
+// setupPartitionConfig configures partition-specific extraction parameters
+func setupPartitionConfig() {
+	// Set default values if both large and small partition workers are 0
+	if extractLargePartitionWorkers == 0 && extractSmallPartitionWorkers == 0 {
+		extractLargePartitionWorkers = 1
+		extractSmallPartitionWorkers = 2
+	}
+
+	// Set default values for threads if 0
+	if extractLargePartitionThreads == 0 {
+		extractLargePartitionThreads = runtime.NumCPU()
+	}
+	if extractSmallPartitionThreads == 0 {
+		extractSmallPartitionThreads = 1
+	}
+
+	// Validate minimum values
+	if extractLargePartitionWorkers < 0 {
+		extractLargePartitionWorkers = 1
+	}
+	if extractSmallPartitionWorkers < 0 {
+		extractSmallPartitionWorkers = 2
+	}
+	if extractLargePartitionThreads < 1 {
+		extractLargePartitionThreads = 1
+	}
+	if extractSmallPartitionThreads < 1 {
+		extractSmallPartitionThreads = 1
+	}
+}
+
+// extractPartitionsWithSizeBasedOptions extracts partitions using size-based processing strategies
+func extractPartitionsWithSizeBasedOptions(d *dumper.Dumper, outputDir string, partitionNames []string, progressCallback func(dumper.ProgressInfo)) error {
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
+	}
+
+	// Get all partitions or specified ones
+	var allPartitions []*dumper.PartitionWithOps
+	if len(partitionNames) == 0 {
+		// Extract all partitions
+		partitions, err := d.GetAllPartitionsWithOps()
+		if err != nil {
+			return fmt.Errorf("failed to get all partitions: %v", err)
+		}
+		allPartitions = partitions
+	} else {
+		// Extract specified partitions
+		partitions, err := d.GetPartitionsWithOps(partitionNames)
+		if err != nil {
+			return fmt.Errorf("failed to get specified partitions: %v", err)
+		}
+		allPartitions = partitions
+	}
+
+	if len(allPartitions) == 0 {
+		fmt.Println(i18n.I18nMsg.Dumper.NotOperatingOnPartitions)
+		return nil
+	}
+
+	// Separate partitions by size
+	var largePartitions, smallPartitions []*dumper.PartitionWithOps
+	for _, partition := range allPartitions {
+		if d.ShouldUseMultithread(partition.Partition) {
+			largePartitions = append(largePartitions, partition)
+		} else {
+			smallPartitions = append(smallPartitions, partition)
+		}
+	}
+
+	// Determine processing order based on configuration
+	var err error
+	if extractLargePartitionWorkers == 0 && extractSmallPartitionWorkers > 0 {
+		// Process small partitions first, then large partitions
+		err = processPartitionsByPriority(d, outputDir, smallPartitions, largePartitions, progressCallback)
+	} else if extractSmallPartitionWorkers == 0 && extractLargePartitionWorkers > 0 {
+		// Process large partitions first, then small partitions
+		err = processPartitionsByPriority(d, outputDir, largePartitions, smallPartitions, progressCallback)
+	} else {
+		// Process both types concurrently
+		err = processPartitionsConcurrently(d, outputDir, largePartitions, smallPartitions, progressCallback)
+	}
+
+	return err
+}
+
+// processPartitionsByPriority processes partitions in priority order (first group, then second group)
+func processPartitionsByPriority(d *dumper.Dumper, outputDir string, firstGroup, secondGroup []*dumper.PartitionWithOps, progressCallback func(dumper.ProgressInfo)) error {
+	// Process first group
+	if len(firstGroup) > 0 {
+		if err := processPartitionGroup(d, outputDir, firstGroup, progressCallback); err != nil {
+			return err
+		}
+	}
+
+	// Process second group
+	if len(secondGroup) > 0 {
+		if err := processPartitionGroup(d, outputDir, secondGroup, progressCallback); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// processPartitionsConcurrently processes large and small partitions concurrently
+func processPartitionsConcurrently(d *dumper.Dumper, outputDir string, largePartitions, smallPartitions []*dumper.PartitionWithOps, progressCallback func(dumper.ProgressInfo)) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, 2)
+
+	// Process large partitions
+	if len(largePartitions) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := processPartitionGroup(d, outputDir, largePartitions, progressCallback); err != nil {
+				errChan <- err
+			}
+		}()
+	}
+
+	// Process small partitions
+	if len(smallPartitions) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := processPartitionGroup(d, outputDir, smallPartitions, progressCallback); err != nil {
+				errChan <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Check for errors
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// processPartitionGroup processes a group of partitions with appropriate concurrency settings
+func processPartitionGroup(d *dumper.Dumper, outputDir string, partitions []*dumper.PartitionWithOps, progressCallback func(dumper.ProgressInfo)) error {
+	if len(partitions) == 0 {
+		return nil
+	}
+
+	// Determine if this is a large or small partition group
+	isLargeGroup := d.ShouldUseMultithread(partitions[0].Partition)
+
+	var partitionWorkers, operationWorkers int
+	if isLargeGroup {
+		partitionWorkers = extractLargePartitionWorkers
+		operationWorkers = extractLargePartitionThreads
+	} else {
+		partitionWorkers = extractSmallPartitionWorkers
+		operationWorkers = extractSmallPartitionThreads
+	}
+
+	return d.MultiprocessPartitions(partitions, outputDir, partitionWorkers, operationWorkers, false, "", progressCallback)
 }
