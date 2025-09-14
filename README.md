@@ -19,10 +19,22 @@ go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@latest
 
 Or download prebuilt binaries from the Releases page: https://github.com/xishang0128/payload-dumper-go/releases
 
-#### Usage on Android
+#### About release names
 
-For Termux, a non-CGO binary is required (which may be slower), or use a CGO-static compiled binary via adb shell.
+- `payload-dumper-<os>-<arch>-<tag>`
+- `<os>`: operating system, e.g. `linux`, `darwin`, `windows`
+- `<arch>`: architecture, e.g. `amd64`, `arm64`
+- `<tag>`: tag/variant
 
+##### Tag meanings
+
+- no tag: Go static build (default). Works on most distributions but extraction may be slower.
+- `cgo`: CGO enabled, faster extraction.
+- `static`: statically linked build, suitable for most distributions.
+- `mingw`: MinGW build for Windows.
+- `termux`: usable only in Termux environment.
+- `gcc`: built using the system's default gcc.
+- `brew`: for macOS Homebrew environment; requires `brew install xz`.
 
 ### Go library
 ```bash

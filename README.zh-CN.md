@@ -17,9 +17,22 @@ go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@latest
 
 或者下载预编译的二进制文件：[Releases](https://github.com/xishang0128/payload-dumper-go/releases)
 
-#### 安卓上的使用
+#### 关于 release 名称
 
-termux 需要非 CGO 的二进制（会比较慢），或者 adb shell 使用 cgo-static 编译的二进制。
+- `payload-dumper-<os>-<arch>-<tag>`
+- `<os>`: 操作系统，如 `linux`, `darwin`, `windows`
+- `<arch>`: 架构，如 `amd64`, `arm64`
+- `<tag>`: 标签
+
+##### 标签含义
+
+- 不带任何标签：GO 静态编译，适用于大多数发行版，但是解压速度较慢
+- `cgo`: 启用 CGO 支持，这会使解压速度更快
+- `static`: 静态编译，适用于大多数发行版
+- `mingw`: 适用于 Windows 的 MinGW 编译
+- `termux`: 仅可在 Termux 环境下使用
+- `gcc`: 使用系统默认的 gcc 编译
+- `brew`: 适用于 macOS 的 brew 环境，需要`brew install xz`
 
 ### Go 库
 ```bash
