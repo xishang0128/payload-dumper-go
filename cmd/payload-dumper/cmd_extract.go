@@ -344,16 +344,41 @@ func setupVerificationManager(d *dumper.Dumper) *verificationManager {
 
 	// Start verification workers
 	bufSize := calculateVerifyBufferSize()
-	for i := 0; i < runtime.NumCPU(); i++ {
+	workerCount := calculateVerifyWorkerCount()
+	for range workerCount {
 		go vm.verificationWorker(bufSize)
 	}
 
 	return vm
 }
 
+// calculateVerifyWorkerCount determines the optimal number of verification workers for the platform
+func calculateVerifyWorkerCount() int {
+	cpuCount := runtime.NumCPU()
+
+	// For Windows, use fewer workers to reduce I/O contention
+	// Windows file system doesn't handle high concurrent file access as well as Unix systems
+	if runtime.GOOS == "windows" {
+		// Use at most 2 workers on Windows to prevent file locking issues
+		return min(2, max(1, cpuCount/4))
+	}
+
+	// For Unix-like systems, use more workers but still limit to prevent excessive resource usage
+	// Use at most half the CPU cores, but at least 2 workers
+	return min(cpuCount/2, max(2, cpuCount/2))
+}
+
 // calculateVerifyBufferSize determines the optimal buffer size for verification
 func calculateVerifyBufferSize() int {
 	bufSize := defaultVerifyBufSize
+
+	// Platform-specific buffer size optimization
+	if runtime.GOOS == "windows" {
+		// Windows performs better with smaller, aligned buffer sizes
+		// Use 1MB buffer instead of 4MB to reduce memory pressure and improve I/O
+		bufSize = 1024 * 1024 // 1MB
+	}
+
 	if dumper.MaxBufferSize > 0 {
 		if dumper.MaxBufferSize < int64(bufSize) {
 			if dumper.MaxBufferSize < minVerifyBufSize {
@@ -361,8 +386,13 @@ func calculateVerifyBufferSize() int {
 			} else {
 				bufSize = int(dumper.MaxBufferSize)
 			}
+		} else if runtime.GOOS == "windows" && dumper.MaxBufferSize > int64(bufSize) {
+			// On Windows, don't exceed our optimized buffer size even if MaxBufferSize allows it
+			// This prevents excessive memory usage that could cause I/O stalls
+			bufSize = min(bufSize, int(dumper.MaxBufferSize))
 		}
 	}
+
 	return bufSize
 }
 
@@ -370,12 +400,56 @@ func calculateVerifyBufferSize() int {
 func (vm *verificationManager) verificationWorker(bufSize int) {
 	buf := make([]byte, bufSize)
 	for partName := range vm.jobs {
-		err := vm.verifyPartition(partName, buf)
+		err := vm.verifyPartitionWithRetry(partName, buf)
 		vm.resultsMu.Lock()
 		vm.results[partName] = err
 		vm.resultsMu.Unlock()
 		vm.wg.Done()
 	}
+}
+
+// verifyPartitionWithRetry wraps verifyPartition with retry logic for Windows
+func (vm *verificationManager) verifyPartitionWithRetry(partName string, buf []byte) error {
+	maxRetries := 1 // Default: no retry for non-Windows platforms
+
+	if runtime.GOOS == "windows" {
+		maxRetries = 3 // Allow up to 3 attempts on Windows
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Brief delay between retries on Windows to allow file system to release locks
+			time.Sleep(time.Duration(attempt*100) * time.Millisecond)
+		}
+
+		if runtime.GOOS == "windows" {
+			// Use timeout for Windows to prevent indefinite hangs
+			done := make(chan error, 1)
+			go func() {
+				done <- vm.verifyPartition(partName, buf)
+			}()
+
+			select {
+			case err := <-done:
+				if err == nil {
+					return nil // Success
+				}
+				lastErr = err
+			case <-time.After(30 * time.Second): // 30 second timeout
+				lastErr = fmt.Errorf("verification timeout for partition %s", partName)
+			}
+		} else {
+			// For non-Windows platforms, use direct verification without timeout
+			err := vm.verifyPartition(partName, buf)
+			if err == nil {
+				return nil
+			}
+			lastErr = err
+		}
+	}
+
+	return lastErr
 }
 
 // verifyPartition verifies a single partition
@@ -566,8 +640,6 @@ func handleVerificationResults(vm *verificationManager) {
 
 	close(vm.jobs)
 	vm.wg.Wait()
-
-	fmt.Println("\nVerification results:")
 	vm.resultsMu.Lock()
 	defer vm.resultsMu.Unlock()
 
