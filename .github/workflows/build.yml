@@ -92,6 +92,11 @@ jobs:
             goarch: arm64
             cgo: true
             output: payload-dumper-linux-arm64-cgo-gcc
+          - os: ubuntu-latest
+            goos: android
+            goarch: arm64
+            cgo: true
+            output: payload-dumper-android-arm64-cgo-termux
 
           # Pure Go version only (no CGO dependencies)
           - os: ubuntu-latest
@@ -136,6 +141,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      
+      - name: Checkout liblzma
+        uses: actions/checkout@v4
+        with:
+          repository: xishang0128/liblzma-android
+          path: liblzma
 
       - name: Update built-in CA certificates
         run: |
@@ -146,19 +157,12 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Set Environment Variables
-        shell: bash
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          fi
-          if [ -z "${VERSION}" ]; then
-            VERSION="dev"
-          fi
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          echo "BUILDTIME=$(date)" >> $GITHUB_ENV
+      - name: Setup Android SDK
+        if: ${{ matrix.goos == 'android' }}
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r29-beta1
 
       - name: Install Linux dependencies for CGO
         if: matrix.goos == 'linux' && matrix.cgo == true
@@ -191,6 +195,57 @@ jobs:
             mingw-w64-clang-aarch64-gcc
             mingw-w64-clang-aarch64-xz
             mingw-w64-clang-aarch64-pkg-config
+
+      - name: Set Environment Variables
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          if [ -z "${VERSION}" ]; then
+            VERSION="dev"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "BUILDTIME=$(date)" >> $GITHUB_ENV
+
+      - name: Set Environment Variables for Android
+        if: ${{ matrix.goos == 'android' }}
+        run: |
+          echo "CC=${{steps.setup-ndk.outputs.ndk-path}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang" >> $GITHUB_ENV
+
+      - name: Set Environment Variables for Windows
+        if: matrix.goos == 'windows' && matrix.cgo == true && matrix.compiler == 'mingw'
+        shell: msys2 {0}
+        run: |
+          if [[ "${{ matrix.goarch }}" == "amd64" ]]; then
+            GCC_PATH=$(which x86_64-w64-mingw32-gcc)
+            GXX_PATH=$(which x86_64-w64-mingw32-g++)
+          elif [[ "${{ matrix.goarch }}" == "arm64" ]]; then
+            GCC_PATH=$(which aarch64-w64-mingw32-gcc)
+            GXX_PATH=$(which aarch64-w64-mingw32-g++)
+          fi
+          GCC_WIN_PATH=$(cygpath -w "$GCC_PATH")
+          GXX_WIN_PATH=$(cygpath -w "$GXX_PATH")
+
+          if [[ "${{ matrix.goarch }}" == "amd64" ]]; then
+            MINGW_ROOT=$(cygpath -w "/mingw64")
+          elif [[ "${{ matrix.goarch }}" == "arm64" ]]; then
+            MINGW_ROOT=$(cygpath -w "/clangarm64")
+          fi
+          echo "CC=$GCC_WIN_PATH" >> $GITHUB_ENV
+          echo "CXX=$GXX_WIN_PATH" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-I${MINGW_ROOT}/include" >> $GITHUB_ENV
+          
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -Wl,-Bstatic -llzma -Wl,-Bdynamic" >> $GITHUB_ENV
+          else
+            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -llzma" >> $GITHUB_ENV
+          fi
+          echo "CPATH=${MINGW_ROOT}/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=${MINGW_ROOT}/lib" >> $GITHUB_ENV
+          echo "${MINGW_ROOT}/bin" >> $GITHUB_PATH
 
       - name: Build CGO version (Linux)
         if: matrix.cgo == true && matrix.goos == 'linux'
@@ -245,38 +300,6 @@ jobs:
               -o bin/${{ matrix.output }} ./cmd/payload-dumper
           fi
 
-      - name: Set MinGW compiler paths
-        if: matrix.goos == 'windows' && matrix.cgo == true && matrix.compiler == 'mingw'
-        shell: msys2 {0}
-        run: |
-          if [[ "${{ matrix.goarch }}" == "amd64" ]]; then
-            GCC_PATH=$(which x86_64-w64-mingw32-gcc)
-            GXX_PATH=$(which x86_64-w64-mingw32-g++)
-          elif [[ "${{ matrix.goarch }}" == "arm64" ]]; then
-            GCC_PATH=$(which aarch64-w64-mingw32-gcc)
-            GXX_PATH=$(which aarch64-w64-mingw32-g++)
-          fi
-          GCC_WIN_PATH=$(cygpath -w "$GCC_PATH")
-          GXX_WIN_PATH=$(cygpath -w "$GXX_PATH")
-
-          if [[ "${{ matrix.goarch }}" == "amd64" ]]; then
-            MINGW_ROOT=$(cygpath -w "/mingw64")
-          elif [[ "${{ matrix.goarch }}" == "arm64" ]]; then
-            MINGW_ROOT=$(cygpath -w "/clangarm64")
-          fi
-          echo "CC=$GCC_WIN_PATH" >> $GITHUB_ENV
-          echo "CXX=$GXX_WIN_PATH" >> $GITHUB_ENV
-          echo "CGO_CFLAGS=-I${MINGW_ROOT}/include" >> $GITHUB_ENV
-          
-          if [[ "${{ matrix.static }}" == "true" ]]; then
-            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -Wl,-Bstatic -llzma -Wl,-Bdynamic" >> $GITHUB_ENV
-          else
-            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -llzma" >> $GITHUB_ENV
-          fi
-          echo "CPATH=${MINGW_ROOT}/include" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=${MINGW_ROOT}/lib" >> $GITHUB_ENV
-          echo "${MINGW_ROOT}/bin" >> $GITHUB_PATH
-
       - name: Build CGO version (Windows MinGW)
         if: matrix.goos == 'windows' && matrix.cgo == true && matrix.compiler == 'mingw'
         env:
@@ -295,6 +318,21 @@ jobs:
               -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
               -o bin/${{ matrix.output }}.exe ./cmd/payload-dumper
           fi
+
+      - name: Build CGO version (Android)
+        if: matrix.goos == 'android' && matrix.cgo == true
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOAMD64: ${{ matrix.goamd64 }}
+          CGO_ENABLED: 1
+        shell: bash
+        run: |
+          CGO_CFLAGS="-I$(pwd)/liblzma/android-arm64/include" \
+          CGO_LDFLAGS="-L$(pwd)/liblzma/android-arm64/lib -Wl,-rpath,/data/data/com.termux/files/usr/lib" \
+          go build \
+            -a -ldflags="-s -w -linkmode external -extldflags '-Wl,-rpath,/data/data/com.termux/files/usr/lib' -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
+            -o bin/${{ matrix.output }} ./cmd/payload-dumper
 
       - name: Build Pure Go version
         if: matrix.cgo == false
