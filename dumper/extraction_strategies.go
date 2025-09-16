@@ -7,129 +7,112 @@ import (
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 )
 
-// ExtractionStrategy defines the extraction strategy type
 type ExtractionStrategy int
 
 const (
-	// StrategySequential processes partitions one by one to minimize resource usage
 	StrategySequential ExtractionStrategy = iota
-	// StrategyAdaptive uses work-stealing algorithm for optimal resource utilization
 	StrategyAdaptive
 )
 
-// extractPartitionsSequential processes partitions one by one
-func (d *Dumper) extractPartitionsSequential(partitions []*PartitionWithOps, outputDir string, cpuCount int, progressCallback ProgressCallback) error {
-	for _, partition := range partitions {
-		var operationWorkers int
-		if d.ShouldUseMultithread(partition.Partition) {
-			operationWorkers = max(2, cpuCount*3/4)
+func (d *Dumper) extractSeq(parts []*PartitionWithOps, outputDir string, cpuCount int, progressCallback ProgressCallback) error {
+	for _, part := range parts {
+		var opWorkers int
+		if d.ShouldUseMultithread(part.Partition) {
+			opWorkers = max(2, cpuCount*3/4)
 		} else {
-			operationWorkers = max(1, cpuCount/2)
+			opWorkers = max(1, cpuCount/2)
 		}
 
-		singlePartition := []*PartitionWithOps{partition}
-		err := d.MultiprocessPartitions(singlePartition, outputDir, 1, operationWorkers, false, "", progressCallback)
+		single := []*PartitionWithOps{part}
+		err := d.MultiprocessPartitions(single, outputDir, 1, opWorkers, false, "", progressCallback)
 		if err != nil {
-			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToProcessPartition, partition.Partition.GetPartitionName(), err)
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToProcessPartition, part.Partition.GetPartitionName(), err)
 		}
 	}
 	return nil
 }
 
-// extractPartitionsWithWorkStealing implements an adaptive work-stealing algorithm
-// that dynamically balances load and prevents resource idling
-func (d *Dumper) extractPartitionsWithWorkStealing(partitions []*PartitionWithOps, outputDir string, cpuCount int, progressCallback ProgressCallback) error {
-	// Classify partitions by processing complexity
+func (d *Dumper) extractAdaptive(parts []*PartitionWithOps, outputDir string, cpuCount int, progressCallback ProgressCallback) error {
 	type partitionWork struct {
 		partition  *PartitionWithOps
 		complexity int
 		priority   int
 	}
 
-	workQueue := make([]*partitionWork, 0, len(partitions))
-	totalComplexity := 0
+	queue := make([]*partitionWork, 0, len(parts))
+	totalComp := 0
 
-	// Analyze and prioritize partitions
-	for _, partition := range partitions {
-		complexity := 1
-		priority := 1
+	for _, part := range parts {
+		comp := 1
+		prio := 1
 
-		if d.ShouldUseMultithread(partition.Partition) {
-			complexity = 3
-			priority = 3 // Process large partitions first to maximize parallelism
+		if d.ShouldUseMultithread(part.Partition) {
+			comp = 3
+			prio = 3
 		} else {
-			// Small partitions can be processed more efficiently in parallel
-			complexity = 1
-			priority = 2
+			comp = 1
+			prio = 2
 		}
 
 		work := &partitionWork{
-			partition:  partition,
-			complexity: complexity,
-			priority:   priority,
+			partition:  part,
+			complexity: comp,
+			priority:   prio,
 		}
-		workQueue = append(workQueue, work)
-		totalComplexity += complexity
+		queue = append(queue, work)
+		totalComp += comp
 	}
 
-	// Sort by priority (high to low) then by complexity (high to low)
-	for i := 0; i < len(workQueue)-1; i++ {
-		for j := i + 1; j < len(workQueue); j++ {
-			if workQueue[j].priority > workQueue[i].priority ||
-				(workQueue[j].priority == workQueue[i].priority && workQueue[j].complexity > workQueue[i].complexity) {
-				workQueue[i], workQueue[j] = workQueue[j], workQueue[i]
+	for i := 0; i < len(queue)-1; i++ {
+		for j := i + 1; j < len(queue); j++ {
+			if queue[j].priority > queue[i].priority ||
+				(queue[j].priority == queue[i].priority && queue[j].complexity > queue[i].complexity) {
+				queue[i], queue[j] = queue[j], queue[i]
 			}
 		}
 	}
 
-	// Dynamic worker allocation based on workload
-	optimalWorkers := d.calculateOptimalWorkers(cpuCount, len(partitions), totalComplexity)
+	optWorkers := d.calcWorkers(cpuCount, len(parts), totalComp)
 
-	// Work-stealing implementation
-	workChan := make(chan *partitionWork, len(workQueue))
+	workChan := make(chan *partitionWork, len(queue))
 	var wg sync.WaitGroup
-	var errorsChan = make(chan error, optimalWorkers)
-	var completedMutex sync.Mutex
-	var completedCount int
+	var errChan = make(chan error, optWorkers)
+	var compMutex sync.Mutex
+	var compCount int
 
-	// Populate work queue
-	for _, work := range workQueue {
+	for _, work := range queue {
 		workChan <- work
 	}
 	close(workChan)
 
-	// Start adaptive workers
-	for i := 0; i < optimalWorkers; i++ {
+	for i := 0; i < optWorkers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 
 			for work := range workChan {
-				// Dynamic operation worker allocation based on partition complexity
-				operationWorkers := d.calculateOperationWorkers(cpuCount, work.complexity, completedCount, len(partitions))
+				opWorkers := d.calcOpWorkers(cpuCount, work.complexity, compCount, len(parts))
 
-				err := d.processPartitionAdaptive(work.partition, outputDir, operationWorkers, progressCallback)
+				err := d.processPartAdaptive(work.partition, outputDir, opWorkers, progressCallback)
 				if err != nil {
-					errorsChan <- fmt.Errorf(i18n.I18nMsg.Dumper.ErrorWorkerFailedToProcessPartition,
+					errChan <- fmt.Errorf(i18n.I18nMsg.Dumper.ErrorWorkerFailedToProcessPartition,
 						workerID, work.partition.Partition.GetPartitionName(), err)
 					return
 				}
 
-				// Update completion status
-				completedMutex.Lock()
-				completedCount++
-				completedMutex.Unlock()
+				compMutex.Lock()
+				compCount++
+				compMutex.Unlock()
 			}
 		}(i)
 	}
 
 	go func() {
 		wg.Wait()
-		close(errorsChan)
+		close(errChan)
 	}()
 
-	// Check for errors
-	for err := range errorsChan {
+	for err := range errChan {
 		if err != nil {
 			return err
 		}
@@ -138,106 +121,74 @@ func (d *Dumper) extractPartitionsWithWorkStealing(partitions []*PartitionWithOp
 	return nil
 }
 
-// calculateOptimalWorkers determines the optimal number of workers based on system resources and workload
-func (d *Dumper) calculateOptimalWorkers(numCPU, partitionCount, totalComplexity int) int {
-	baseWorkers := min(partitionCount, numCPU)
-
-	complexityFactor := float64(totalComplexity) / float64(partitionCount)
-	if complexityFactor > 2.0 {
+func (d *Dumper) calcWorkers(numCPU, count, totalComp int) int {
+	baseWorkers := min(count, numCPU)
+	compFactor := float64(totalComp) / float64(count)
+	if compFactor > 2.0 {
 		baseWorkers = min(baseWorkers*2, numCPU*2)
-	} else if complexityFactor < 1.5 {
+	} else if compFactor < 1.5 {
 		baseWorkers = max(baseWorkers/2, 1)
 	}
 
-	return max(1, min(baseWorkers, partitionCount))
+	return max(1, min(baseWorkers, count))
 }
 
-// calculateOperationWorkers dynamically calculates operation workers based on current state
-func (d *Dumper) calculateOperationWorkers(numCPU, complexity, completed, total int) int {
-	// Base allocation
+func (d *Dumper) calcOpWorkers(numCPU, comp, done, total int) int {
 	baseWorkers := max(1, numCPU/2)
 
-	// Adjust based on complexity
-	switch complexity {
-	case 3: // Complex partition
+	switch comp {
+	case 3:
 		baseWorkers = max(2, numCPU*3/4)
-	case 2: // Medium partition
+	case 2:
 		baseWorkers = max(1, numCPU/2)
-	case 1: // Simple partition
+	case 1:
 		baseWorkers = max(1, numCPU/4)
 	}
 
-	// Boost workers for remaining partitions to utilize freed resources
-	remainingRatio := float64(total-completed) / float64(total)
-	if remainingRatio < 0.3 && complexity >= 2 {
-		// Less than 30% remaining and dealing with complex partitions
+	remRatio := float64(total-done) / float64(total)
+	if remRatio < 0.3 && comp >= 2 {
 		baseWorkers = min(numCPU, baseWorkers*2)
 	}
 
 	return max(1, baseWorkers)
 }
 
-// processPartitionAdaptive processes a single partition with adaptive resource allocation
-func (d *Dumper) processPartitionAdaptive(partitionWithOps *PartitionWithOps, outputDir string, operationWorkers int, progressCallback ProgressCallback) error {
-	// Create a slice containing just this partition for the MultiprocessPartitions call
-	partitions := []*PartitionWithOps{partitionWithOps}
-
-	// Use 1 partition worker since we're processing one partition at a time in this goroutine
-	// The parallelism comes from multiple goroutines calling this function concurrently
-	return d.MultiprocessPartitions(partitions, outputDir, 1, operationWorkers, false, "", progressCallback)
+func (d *Dumper) processPartAdaptive(withOps *PartitionWithOps, outputDir string, opWorkers int, progressCallback ProgressCallback) error {
+	parts := []*PartitionWithOps{withOps}
+	return d.MultiprocessPartitions(parts, outputDir, 1, opWorkers, false, "", progressCallback)
 }
 
-// extractSinglePartitionOptimized provides maximum CPU utilization for single partition extraction
-func (d *Dumper) extractSinglePartitionOptimized(partition *PartitionWithOps, outputDir string, cpuCount int, progressCallback ProgressCallback) error {
-
-	// For single partition, maximize operation-level parallelism and optimize I/O
-	var operationWorkers int
-
-	// Get partition size to determine optimal strategy
-	sizeInBytes := d.getPartitionSizeInBytes(partition.Partition)
-	operationCount := len(partition.Operations)
-
-	// Temporarily increase buffer size for large single partition extraction
-	originalBufferSize := MaxBufferSize
+func (d *Dumper) extractSingle(part *PartitionWithOps, outputDir string, cpuCount int, progressCallback ProgressCallback) error {
+	origBuf := MaxBufferSize
 	defer func() {
-		MaxBufferSize = originalBufferSize
+		MaxBufferSize = origBuf
 	}()
 
-	if d.ShouldUseMultithread(partition.Partition) {
-		// Large partition: aggressive CPU utilization since it's the only task
+	var opWorkers int
+	sizeInBytes := d.size(part.Partition)
+	operationCount := len(part.Operations)
+
+	if d.ShouldUseMultithread(part.Partition) {
 		if operationCount > cpuCount*2 {
-			// Many operations: use all available CPU cores
-			operationWorkers = cpuCount
+			opWorkers = cpuCount
 		} else {
-			// Fewer operations: still use most cores but leave some for I/O
-			operationWorkers = max(2, cpuCount*3/4)
+			opWorkers = max(2, cpuCount*3/4)
 		}
 
-		// For very large partitions (>1GB), optimize I/O and buffer size
 		if sizeInBytes > 1024*1024*1024 {
-			// Boost worker count for I/O intensive workloads
-			operationWorkers = min(cpuCount+2, cpuCount*5/4)
-
-			// Increase buffer size for large partitions to reduce I/O overhead
-			// Use larger buffers when we have lots of memory for single partition
-			MaxBufferSize = min(256*1024*1024, MaxBufferSize*4) // Up to 256MB
+			opWorkers = min(cpuCount+2, cpuCount*5/4)
+			MaxBufferSize = min(256*1024*1024, MaxBufferSize*4)
 		}
 	} else {
-		// Small partition: but it's the ONLY task, so use substantial CPU power
-		// Even small partitions benefit from parallelism when they're the sole focus
 		if operationCount > cpuCount {
-			// Many operations in small partition: use most CPU cores
-			operationWorkers = max(2, cpuCount*3/4)
+			opWorkers = max(2, cpuCount*3/4)
 		} else if operationCount > 2 {
-			// Moderate operations: use half the CPU cores minimum
-			operationWorkers = max(2, cpuCount/2)
+			opWorkers = max(2, cpuCount/2)
 		} else {
-			// Very few operations: still use multiple threads for I/O overlap
-			operationWorkers = max(1, min(operationCount, cpuCount/4))
+			opWorkers = max(1, min(operationCount, cpuCount/4))
 		}
 	}
 
-	// Use single partition worker since we only have one partition
-	singlePartition := []*PartitionWithOps{partition}
-	return d.MultiprocessPartitions(singlePartition, outputDir, 1, operationWorkers, false, "", progressCallback)
+	single := []*PartitionWithOps{part}
+	return d.MultiprocessPartitions(single, outputDir, 1, opWorkers, false, "", progressCallback)
 }

@@ -15,7 +15,6 @@ import (
 
 var metadataCmd *cobra.Command
 
-// MetadataInfo represents metadata information in JSON format
 type MetadataInfo struct {
 	Properties  map[string]string `json:"properties"`
 	Size        int               `json:"size"`
@@ -31,7 +30,6 @@ var (
 )
 
 func initMetadataCmd() {
-	// Initialize metadata command with localized strings
 	metadataCmd = &cobra.Command{
 		Use:   i18n.I18nMsg.Metadata.Use,
 		Short: i18n.I18nMsg.Metadata.Short,
@@ -48,12 +46,9 @@ func initMetadataCmd() {
 	rootCmd.AddCommand(metadataCmd)
 }
 
-// parseMetadata parses the metadata content into a map of properties
-func parseMetadata(metadata []byte) map[string]string {
-	properties := make(map[string]string)
+func parseMeta(metadata []byte) map[string]string {
+	props := make(map[string]string)
 	content := string(metadata)
-
-	// Split by lines and parse key=value pairs
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -61,15 +56,14 @@ func parseMetadata(metadata []byte) map[string]string {
 			continue
 		}
 
-		// Find the first = to split key and value
 		if idx := strings.Index(line, "="); idx != -1 {
 			key := strings.TrimSpace(line[:idx])
 			value := strings.TrimSpace(line[idx+1:])
-			properties[key] = value
+			props[key] = value
 		}
 	}
 
-	return properties
+	return props
 }
 
 func runMetadata(cmd *cobra.Command, args []string) {
@@ -80,82 +74,72 @@ func runMetadata(cmd *cobra.Command, args []string) {
 	}()
 	payloadFile := args[0]
 
-	// Create dumper
 	d, err := createDumper(payloadFile)
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
 
-	// Extract metadata
 	metadata, err := d.ExtractMetadata()
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Metadata.ErrorFailedToGetMetadata, err)
 	}
 
-	// Output results
 	if metadataJson {
-		// Output as JSON
-		properties := parseMetadata(metadata)
-		metadataInfo := MetadataInfo{
-			Properties:  properties,
+		props := parseMeta(metadata)
+		info := MetadataInfo{
+			Properties:  props,
 			Size:        len(metadata),
 			PayloadFile: payloadFile,
 		}
 
-		// Include raw content only if --raw flag is specified
 		if metadataRaw {
-			metadataInfo.Raw = string(metadata)
+			info.Raw = string(metadata)
 		}
 
-		jsonData, err := json.MarshalIndent(metadataInfo, "", "    ")
+		data, err := json.MarshalIndent(info, "", "    ")
 		if err != nil {
 			log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToMarshalJSON, err)
 		}
-		fmt.Println(string(jsonData))
+		fmt.Println(string(data))
 	} else {
-		// Output as plain text
 		fmt.Printf("%s", string(metadata))
 	}
 
-	// Save to file if requested
 	if metadataSave {
 		if err := os.MkdirAll(metadataOut, 0755); err != nil {
 			log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 		}
 
-		var outputFile string
-		var dataToSave []byte
+		var outFile string
+		var saveData []byte
 		var err error
 
 		if metadataJson {
-			// Save as JSON file
-			outputFile = filepath.Join(metadataOut, "metadata_info.json")
-			properties := parseMetadata(metadata)
-			metadataInfo := MetadataInfo{
-				Properties:  properties,
+			outFile = filepath.Join(metadataOut, "metadata_info.json")
+			props := parseMeta(metadata)
+			info := MetadataInfo{
+				Properties:  props,
 				Size:        len(metadata),
 				PayloadFile: payloadFile,
 			}
 
-			// Include raw content only if --raw flag is specified
 			if metadataRaw {
-				metadataInfo.Raw = string(metadata)
+				info.Raw = string(metadata)
 			}
 
-			dataToSave, err = json.MarshalIndent(metadataInfo, "", "    ")
+			saveData, err = json.MarshalIndent(info, "", "    ")
 			if err != nil {
 				log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToMarshalJSON, err)
 			}
 		} else {
-			// Save as plain text file
-			outputFile = filepath.Join(metadataOut, "metadata")
-			dataToSave = metadata
+			outFile = filepath.Join(metadataOut, "metadata")
+			saveData = metadata
 		}
 
-		if err := os.WriteFile(outputFile, dataToSave, 0644); err != nil {
+		if err := os.WriteFile(outFile, saveData, 0644); err != nil {
 			log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToWriteFile, err)
 		}
 
-		fmt.Printf(i18n.I18nMsg.Metadata.MetadataSaved, outputFile)
+		fmt.Printf(i18n.I18nMsg.Metadata.MetadataSaved, outFile)
 	}
 }

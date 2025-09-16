@@ -21,21 +21,15 @@ type Dumper struct {
 	blockSize   uint32
 }
 
-// MaxBufferSize controls the maximum temporary buffer size used while processing operations.
-// Value is in bytes. Default set internally but can be overridden by callers (e.g., cmd layer).
-var MaxBufferSize int64 = 64 * 1024 * 1024 // 64 MB
+var MaxBufferSize int64 = 64 * 1024 * 1024
 
-// MultithreadThreshold defines the minimum partition size for multi-threading
-// Partitions smaller than this size will be processed with single thread
-var MultithreadThreshold uint64 = 128 * 1024 * 1024 // 128 MB (default)
+var MultithreadThreshold uint64 = 128 * 1024 * 1024
 
-// SetMultithreadThreshold sets the threshold for multi-threading decision
-// Partitions larger than this threshold will use multi-threading, smaller ones will use single-threading
 func SetMultithreadThreshold(threshold uint64) {
 	MultithreadThreshold = threshold
 }
 
-// PartitionInfo represents information about a partition
+// PartitionInfo contains information about a partition
 type PartitionInfo struct {
 	PartitionName string `json:"partition_name"`
 	SizeInBlocks  uint64 `json:"size_in_blocks"`
@@ -44,7 +38,7 @@ type PartitionInfo struct {
 	Hash          string `json:"hash"`
 }
 
-// ProgressInfo represents progress information for extraction
+// ProgressInfo contains progress information for extraction operations
 type ProgressInfo struct {
 	PartitionName    string  `json:"partition_name"`
 	TotalOperations  int     `json:"total_operations"`
@@ -55,10 +49,10 @@ type ProgressInfo struct {
 	SizeReadable     string  `json:"size_readable"`
 }
 
-// ProgressCallback is a function type for receiving progress updates
+// ProgressCallback is called during extraction to report progress
 type ProgressCallback func(progress ProgressInfo)
 
-// Operation represents an operation to be performed
+// Operation represents a single update operation
 type Operation struct {
 	Operation *metadata.InstallOperation
 	Offset    int64
@@ -71,8 +65,7 @@ type PartitionWithOps struct {
 	Operations []Operation
 }
 
-// formatSize converts bytes into a human-readable string.
-func formatSize(bytes uint64) string {
+func fmtSize(bytes uint64) string {
 	const (
 		KB = 1024
 		MB = KB * 1024

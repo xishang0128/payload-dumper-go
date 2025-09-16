@@ -19,7 +19,6 @@ var (
 )
 
 func initExtractDiffCmd() {
-	// Initialize extract-diff command with localized strings
 	extractDiffCmd := &cobra.Command{
 		Use:   i18n.I18nMsg.ExtractDiff.Use,
 		Short: i18n.I18nMsg.ExtractDiff.Short,
@@ -43,14 +42,12 @@ func runExtractDiff(cmd *cobra.Command, args []string) {
 		fmt.Printf(i18n.I18nMsg.Common.ElapsedTime+"\n", elapsed)
 	}()
 
-	// Create dumper
 	d, err := createDumper(args[0])
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
 	defer closeDumper(d)
 
-	// Parse partition names
 	var partitionNames []string
 	if diffPartitions != "" {
 		partitionNames = strings.Split(diffPartitions, ",")
@@ -59,7 +56,6 @@ func runExtractDiff(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Extract partitions with diff
 	if err := d.ExtractPartitionsDiff(diffOut, diffOld, partitionNames, diffWorkers); err != nil {
 		log.Fatalf(i18n.I18nMsg.ExtractDiff.ErrorFailedToExtractDiff, err)
 	}

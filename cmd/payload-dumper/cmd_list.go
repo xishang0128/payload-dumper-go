@@ -22,7 +22,6 @@ var (
 )
 
 func initListCmd() {
-	// Initialize list command with localized strings
 	listCmd := &cobra.Command{
 		Use:   i18n.I18nMsg.List.Use,
 		Short: i18n.I18nMsg.List.Short,
@@ -50,23 +49,21 @@ func runList(cmd *cobra.Command, args []string) {
 
 	payloadFile := args[0]
 
-	// Create dumper
 	d, err := createDumper(payloadFile)
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDumper, err)
 	}
 
-	// Get partition info
 	partitionsInfo, err := d.ListPartitionsAsMap()
 	if err != nil {
 		log.Fatalf(i18n.I18nMsg.List.ErrorFailedToList, err)
 	}
 
 	if listPartitions != "" {
-		requested := strings.Split(listPartitions, ",")
+		req := strings.Split(listPartitions, ",")
 		pi := make(map[string]dumper.PartitionInfo)
 
-		for _, name := range requested {
+		for _, name := range req {
 			if info, ok := partitionsInfo[name]; ok {
 				pi[name] = info
 			}
@@ -74,54 +71,48 @@ func runList(cmd *cobra.Command, args []string) {
 		partitionsInfo = pi
 	}
 
-	// Output results
 	if listJson {
-		// Output as JSON to stdout
-		jsonData, err := json.MarshalIndent(partitionsInfo, "", "    ")
+		data, err := json.MarshalIndent(partitionsInfo, "", "    ")
 		if err != nil {
 			log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToMarshalJSON, err)
 		}
-		fmt.Println(string(jsonData))
+		fmt.Println(string(data))
 	} else {
-		// Output as human-readable format
 		fmt.Printf(i18n.I18nMsg.List.TotalPartitions+"\n", len(partitionsInfo))
 		for _, info := range partitionsInfo {
 			fmt.Printf("%s (%s)\n", info.PartitionName, info.SizeReadable)
 		}
 	}
 
-	// Save to file if requested
 	if listSave {
 		if err := os.MkdirAll(listOut, 0755); err != nil {
 			log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 		}
 
-		var outputFile string
-		var dataToSave []byte
+		var outFile string
+		var saveData []byte
 		var err error
 
 		if listJson {
-			// Save as JSON file
-			outputFile = filepath.Join(listOut, "partitions_info.json")
-			dataToSave, err = json.MarshalIndent(partitionsInfo, "", "    ")
+			outFile = filepath.Join(listOut, "partitions_info.json")
+			saveData, err = json.MarshalIndent(partitionsInfo, "", "    ")
 			if err != nil {
 				log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToMarshalJSON, err)
 			}
 		} else {
-			// Save as plain text file
-			outputFile = filepath.Join(listOut, "partitions_info.txt")
+			outFile = filepath.Join(listOut, "partitions_info.txt")
 			var content strings.Builder
 			content.WriteString(fmt.Sprintf(i18n.I18nMsg.List.TotalPartitions+"\n", len(partitionsInfo)))
 			for _, info := range partitionsInfo {
 				content.WriteString(fmt.Sprintf("%s (%s)\n", info.PartitionName, info.SizeReadable))
 			}
-			dataToSave = []byte(content.String())
+			saveData = []byte(content.String())
 		}
 
-		if err := os.WriteFile(outputFile, dataToSave, 0644); err != nil {
+		if err := os.WriteFile(outFile, saveData, 0644); err != nil {
 			log.Fatalf(i18n.I18nMsg.Common.ErrorFailedToWriteFile, err)
 		}
 
-		fmt.Printf(i18n.I18nMsg.List.PartitionInfoSaved, outputFile)
+		fmt.Printf(i18n.I18nMsg.List.PartitionInfoSaved, outFile)
 	}
 }

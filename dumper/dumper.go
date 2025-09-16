@@ -15,7 +15,6 @@ import (
 	"github.com/xishang0128/payload-dumper-go/common/ziputil"
 )
 
-// Close releases underlying resources held by the Dumper (e.g. the payload reader).
 func (d *Dumper) Close() error {
 	if d == nil || d.payloadFile == nil {
 		return nil
@@ -23,18 +22,7 @@ func (d *Dumper) Close() error {
 	return d.payloadFile.Close()
 }
 
-// New creates a new Dumper instance for extracting Android OTA payloads.
-// The reader parameter should be an implementation of file.Reader (such as LocalFile or HTTPFile).
-//
-// Example:
-//
-//	reader, err := file.NewLocalFile("payload.bin")
-//	if err != nil {
-//	    return err
-//	}
-//	defer reader.Close()
-//
-//	dumper, err := dumper.New(reader)
+// New creates a new Dumper instance for the given payload file
 func New(reader file.Reader) (*Dumper, error) {
 	i18n.InitLanguage()
 	dumper := &Dumper{
@@ -52,17 +40,12 @@ func New(reader file.Reader) (*Dumper, error) {
 	return dumper, nil
 }
 
-// ExtractPartitions extracts specified partitions from the payload.
-// If partitionNames is empty, all partitions will be extracted.
+// ExtractPartitions extracts specified partitions to the output directory
 func (d *Dumper) ExtractPartitions(outputDir string, partitionNames []string, workers int) error {
 	return d.ExtractPartitionsWithFullOptions(outputDir, partitionNames, workers, workers, nil)
 }
 
-// ExtractPartitionsWithFullOptions extracts specified partitions with full control over concurrency options.
-// partitionWorkers controls how many partitions are processed concurrently.
-// operationWorkers controls how many worker threads are used per partition for processing operations.
-// If partitionNames is empty, all partitions will be extracted.
-// The progressCallback will be called with progress updates during extraction.
+// ExtractPartitionsWithFullOptions extracts partitions with full configuration options
 func (d *Dumper) ExtractPartitionsWithFullOptions(outputDir string, partitionNames []string, partitionWorkers, operationWorkers int, progressCallback ProgressCallback) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
@@ -94,7 +77,7 @@ func (d *Dumper) ExtractPartitionsWithFullOptions(outputDir string, partitionNam
 		return nil
 	}
 
-	partitionsWithOps := make([]PartitionWithOps, 0, len(partitions))
+	withOps := make([]PartitionWithOps, 0, len(partitions))
 	for _, partition := range partitions {
 		operations := make([]Operation, 0, len(partition.Operations))
 		for _, operation := range partition.Operations {
@@ -104,21 +87,21 @@ func (d *Dumper) ExtractPartitionsWithFullOptions(outputDir string, partitionNam
 				Length:    operation.GetDataLength(),
 			})
 		}
-		partitionsWithOps = append(partitionsWithOps, PartitionWithOps{
+		withOps = append(withOps, PartitionWithOps{
 			Partition:  partition,
 			Operations: operations,
 		})
 	}
 
-	return d.multiprocessPartitions(partitionsWithOps, outputDir, partitionWorkers, operationWorkers, false, "", progressCallback)
+	return d.procMulti(withOps, outputDir, partitionWorkers, operationWorkers, false, "", progressCallback)
 }
 
-// ExtractPartitionsDiff extracts partitions using differential OTA.
+// ExtractPartitionsDiff extracts partitions using differential update with old partition images
 func (d *Dumper) ExtractPartitionsDiff(outputDir string, oldDir string, partitionNames []string, workers int) error {
 	return d.ExtractPartitionsDiffWithProgress(outputDir, oldDir, partitionNames, workers, nil)
 }
 
-// ExtractPartitionsDiffWithProgress extracts partitions using differential OTA with progress reporting.
+// ExtractPartitionsDiffWithProgress extracts partitions using differential update with progress reporting
 func (d *Dumper) ExtractPartitionsDiffWithProgress(outputDir string, oldDir string, partitionNames []string, workers int, progressCallback ProgressCallback) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
@@ -150,7 +133,7 @@ func (d *Dumper) ExtractPartitionsDiffWithProgress(outputDir string, oldDir stri
 		return nil
 	}
 
-	partitionsWithOps := make([]PartitionWithOps, 0, len(partitions))
+	withOps := make([]PartitionWithOps, 0, len(partitions))
 	for _, partition := range partitions {
 		operations := make([]Operation, 0, len(partition.Operations))
 		for _, operation := range partition.Operations {
@@ -160,116 +143,107 @@ func (d *Dumper) ExtractPartitionsDiffWithProgress(outputDir string, oldDir stri
 				Length:    operation.GetDataLength(),
 			})
 		}
-		partitionsWithOps = append(partitionsWithOps, PartitionWithOps{
+		withOps = append(withOps, PartitionWithOps{
 			Partition:  partition,
 			Operations: operations,
 		})
 	}
 
-	return d.multiprocessPartitions(partitionsWithOps, outputDir, workers, workers, true, oldDir, progressCallback)
+	return d.procMulti(withOps, outputDir, workers, workers, true, oldDir, progressCallback)
 }
 
-// ListPartitions returns partition information from the payload.
+// ListPartitions returns a list of all partitions in the payload
 func (d *Dumper) ListPartitions() ([]PartitionInfo, error) {
-	var partitionsInfo []PartitionInfo
+	var info []PartitionInfo
 
 	for _, partition := range d.manifest.GetPartitions() {
-		var sizeInBlocks uint64
+		var blocks uint64
 		for _, operation := range partition.GetOperations() {
 			for _, extent := range operation.GetDstExtents() {
-				sizeInBlocks += extent.GetNumBlocks()
+				blocks += extent.GetNumBlocks()
 			}
 		}
 
-		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-		sizeReadable := formatSize(sizeInBytes)
+		bytes := blocks * uint64(d.blockSize)
+		readable := fmtSize(bytes)
 
 		hash := ""
 		if partition.GetNewPartitionInfo() != nil && partition.GetNewPartitionInfo().GetHash() != nil {
 			hash = fmt.Sprintf("%x", partition.GetNewPartitionInfo().GetHash())
 		}
 
-		partitionsInfo = append(partitionsInfo, PartitionInfo{
+		info = append(info, PartitionInfo{
 			PartitionName: partition.GetPartitionName(),
-			SizeInBlocks:  sizeInBlocks,
-			SizeInBytes:   sizeInBytes,
-			SizeReadable:  sizeReadable,
+			SizeInBlocks:  blocks,
+			SizeInBytes:   bytes,
+			SizeReadable:  readable,
 			Hash:          hash,
 		})
 	}
 
-	return partitionsInfo, nil
+	return info, nil
 }
 
-// ListPartitionsAsMap returns partition information as a map with partition names as keys.
-// This allows for efficient lookup of partition information by name.
+// ListPartitionsAsMap returns a map of partition name to partition info
 func (d *Dumper) ListPartitionsAsMap() (map[string]PartitionInfo, error) {
-	partitionsInfo := make(map[string]PartitionInfo)
+	info := make(map[string]PartitionInfo)
 
 	for _, partition := range d.manifest.GetPartitions() {
-		var sizeInBlocks uint64
+		var blocks uint64
 		for _, operation := range partition.GetOperations() {
 			for _, extent := range operation.GetDstExtents() {
-				sizeInBlocks += extent.GetNumBlocks()
+				blocks += extent.GetNumBlocks()
 			}
 		}
 
-		sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-		sizeReadable := formatSize(sizeInBytes)
+		bytes := blocks * uint64(d.blockSize)
+		readable := fmtSize(bytes)
 
 		hash := ""
 		if partition.GetNewPartitionInfo() != nil && partition.GetNewPartitionInfo().GetHash() != nil {
 			hash = fmt.Sprintf("%x", partition.GetNewPartitionInfo().GetHash())
 		}
 
-		partitionName := partition.GetPartitionName()
-		partitionsInfo[partitionName] = PartitionInfo{
-			PartitionName: partitionName,
-			SizeInBlocks:  sizeInBlocks,
-			SizeInBytes:   sizeInBytes,
-			SizeReadable:  sizeReadable,
+		name := partition.GetPartitionName()
+		info[name] = PartitionInfo{
+			PartitionName: name,
+			SizeInBlocks:  blocks,
+			SizeInBytes:   bytes,
+			SizeReadable:  readable,
 			Hash:          hash,
 		}
 	}
 
-	return partitionsInfo, nil
+	return info, nil
 }
 
-// getPartitionSizeInBytes calculates the total size of a partition in bytes
-func (d *Dumper) getPartitionSizeInBytes(partition *metadata.PartitionUpdate) uint64 {
-	var sizeInBlocks uint64
+func (d *Dumper) size(partition *metadata.PartitionUpdate) uint64 {
+	var blocks uint64
 	for _, operation := range partition.GetOperations() {
 		for _, extent := range operation.GetDstExtents() {
-			sizeInBlocks += extent.GetNumBlocks()
+			blocks += extent.GetNumBlocks()
 		}
 	}
-	return sizeInBlocks * uint64(d.blockSize)
+	return blocks * uint64(d.blockSize)
 }
 
-// shouldUseMultithread determines if a partition should be processed with multiple threads
-// based on its size compared to MultithreadThreshold
-func (d *Dumper) shouldUseMultithread(partition *metadata.PartitionUpdate) bool {
-	sizeInBytes := d.getPartitionSizeInBytes(partition)
+func (d *Dumper) multi(partition *metadata.PartitionUpdate) bool {
+	sizeInBytes := d.size(partition)
 	return sizeInBytes > MultithreadThreshold
 }
 
-// ShouldUseMultithread determines if a partition should be processed with multiple threads
-// based on its size compared to MultithreadThreshold
 func (d *Dumper) ShouldUseMultithread(partition *metadata.PartitionUpdate) bool {
-	return d.shouldUseMultithread(partition)
+	return d.multi(partition)
 }
 
-// MultiprocessPartitions processes partitions with specified concurrency settings
 func (d *Dumper) MultiprocessPartitions(partitions []*PartitionWithOps, outputDir string, partitionWorkers, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
-	// Convert from pointer slice to value slice for internal use
-	partitionsWithOps := make([]PartitionWithOps, len(partitions))
+	withOps := make([]PartitionWithOps, len(partitions))
 	for i, p := range partitions {
-		partitionsWithOps[i] = *p
+		withOps[i] = *p
 	}
-	return d.multiprocessPartitions(partitionsWithOps, outputDir, partitionWorkers, operationWorkers, isDiff, oldDir, progressCallback)
+	return d.procMulti(withOps, outputDir, partitionWorkers, operationWorkers, isDiff, oldDir, progressCallback)
 }
 
-// GetAllPartitionsWithOps returns all partitions with their operations
 func (d *Dumper) GetAllPartitionsWithOps() ([]*PartitionWithOps, error) {
 	partitions := make([]*PartitionWithOps, 0, len(d.manifest.Partitions))
 	for _, partition := range d.manifest.Partitions {
@@ -289,7 +263,6 @@ func (d *Dumper) GetAllPartitionsWithOps() ([]*PartitionWithOps, error) {
 	return partitions, nil
 }
 
-// GetPartitionsWithOps returns specified partitions with their operations
 func (d *Dumper) GetPartitionsWithOps(partitionNames []string) ([]*PartitionWithOps, error) {
 	partitions := make([]*PartitionWithOps, 0, len(partitionNames))
 
@@ -322,7 +295,7 @@ func (d *Dumper) GetPartitionsWithOps(partitionNames []string) ([]*PartitionWith
 	return partitions, nil
 }
 
-func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir string, partitionWorkers, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
+func (d *Dumper) procMulti(partitions []PartitionWithOps, outputDir string, partitionWorkers, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
 	if partitionWorkers <= 0 {
 		partitionWorkers = runtime.NumCPU()
 	}
@@ -331,58 +304,55 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 	}
 
 	var wg sync.WaitGroup
-	var completedPartitions []string
+	var completed []string
 	var mu sync.Mutex
 
-	// Separate partitions by size
-	largePartitions := make([]PartitionWithOps, 0)
-	smallPartitions := make([]PartitionWithOps, 0)
+	large := make([]PartitionWithOps, 0)
+	small := make([]PartitionWithOps, 0)
 
 	for _, part := range partitions {
-		if d.shouldUseMultithread(part.Partition) {
-			largePartitions = append(largePartitions, part)
+		if d.multi(part.Partition) {
+			large = append(large, part)
 		} else {
-			smallPartitions = append(smallPartitions, part)
+			small = append(small, part)
 		}
 	}
 
-	// Process large partitions with partition-level concurrency
-	largeSemaphore := make(chan struct{}, partitionWorkers)
-	for _, part := range largePartitions {
+	largeSem := make(chan struct{}, partitionWorkers)
+	for _, part := range large {
 		wg.Add(1)
 		go func(p PartitionWithOps) {
 			defer wg.Done()
-			largeSemaphore <- struct{}{}
-			defer func() { <-largeSemaphore }()
+			largeSem <- struct{}{}
+			defer func() { <-largeSem }()
 
-			partitionName := p.Partition.GetPartitionName()
+			name := p.Partition.GetPartitionName()
 
-			if err := d.processPartition(p, outputDir, operationWorkers, isDiff, oldDir, progressCallback); err != nil {
-				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
+			if err := d.procPart(p, outputDir, operationWorkers, isDiff, oldDir, progressCallback); err != nil {
+				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, name, err)
 			} else {
 				mu.Lock()
-				completedPartitions = append(completedPartitions, partitionName)
+				completed = append(completed, name)
 				mu.Unlock()
 			}
 		}(part)
 	}
 
-	// Process small partitions with limited concurrency (single-threaded)
-	smallSemaphore := make(chan struct{}, 1) // Only 1 small partition at a time
-	for _, part := range smallPartitions {
+	smallSem := make(chan struct{}, 1)
+	for _, part := range small {
 		wg.Add(1)
 		go func(p PartitionWithOps) {
 			defer wg.Done()
-			smallSemaphore <- struct{}{}
-			defer func() { <-smallSemaphore }()
+			smallSem <- struct{}{}
+			defer func() { <-smallSem }()
 
-			partitionName := p.Partition.GetPartitionName()
+			name := p.Partition.GetPartitionName()
 
-			if err := d.processPartitionSingleThreaded(p, outputDir, isDiff, oldDir, progressCallback); err != nil {
-				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, partitionName, err)
+			if err := d.procPart(p, outputDir, 1, isDiff, oldDir, progressCallback); err != nil {
+				log.Printf(i18n.I18nMsg.Dumper.ErrorProcessingPartition, name, err)
 			} else {
 				mu.Lock()
-				completedPartitions = append(completedPartitions, partitionName)
+				completed = append(completed, name)
 				mu.Unlock()
 			}
 		}(part)
@@ -393,52 +363,49 @@ func (d *Dumper) multiprocessPartitions(partitions []PartitionWithOps, outputDir
 	return nil
 }
 
-// ExtractPartitionsWithStrategy extracts partitions using the specified strategy and CPU count
 func (d *Dumper) ExtractPartitionsWithStrategy(outputDir string, partitionNames []string, strategy ExtractionStrategy, cpuCount int, progressCallback ProgressCallback) error {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf(i18n.I18nMsg.Common.ErrorFailedToCreateDir, err)
 	}
 
-	// Get all partitions or specified ones
-	var allPartitions []*PartitionWithOps
+	var all []*PartitionWithOps
 	if len(partitionNames) == 0 {
 		partitions, err := d.GetAllPartitionsWithOps()
 		if err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToGetAllPartitions, err)
 		}
-		allPartitions = partitions
+		all = partitions
 	} else {
 		partitions, err := d.GetPartitionsWithOps(partitionNames)
 		if err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToGetSpecifiedPartitions, err)
 		}
-		allPartitions = partitions
+		all = partitions
 	}
 
-	if len(allPartitions) == 0 {
+	if len(all) == 0 {
 		fmt.Println(i18n.I18nMsg.Dumper.NotOperatingOnPartitions)
 		return nil
 	}
 
-	// Special optimization for single partition extraction
-	if len(allPartitions) == 1 {
-		return d.extractSinglePartitionOptimized(allPartitions[0], outputDir, cpuCount, progressCallback)
+	if len(all) == 1 {
+		return d.extractSingle(all[0], outputDir, cpuCount, progressCallback)
 	}
 
 	switch strategy {
 	case StrategySequential:
-		return d.extractPartitionsSequential(allPartitions, outputDir, cpuCount, progressCallback)
+		return d.extractSeq(all, outputDir, cpuCount, progressCallback)
 	case StrategyAdaptive:
-		return d.extractPartitionsWithWorkStealing(allPartitions, outputDir, cpuCount, progressCallback)
+		return d.extractAdaptive(all, outputDir, cpuCount, progressCallback)
 	default:
 		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorUnknownExtractionStrategy, strategy)
 	}
 }
 
-func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
-	partitionName := part.Partition.GetPartitionName()
+func (d *Dumper) procPart(part PartitionWithOps, outputDir string, operationWorkers int, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
+	name := part.Partition.GetPartitionName()
 
-	outputPath := filepath.Join(outputDir, partitionName+".img")
+	outputPath := filepath.Join(outputDir, name+".img")
 	outFile, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToCreateOutputFile, err)
@@ -447,7 +414,7 @@ func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, opera
 
 	var oldFile *os.File
 	if isDiff {
-		oldPath := filepath.Join(oldDir, partitionName+".img")
+		oldPath := filepath.Join(oldDir, name+".img")
 		oldFile, err = os.Open(oldPath)
 		if err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToOpenOldFile, err)
@@ -455,67 +422,27 @@ func (d *Dumper) processPartition(part PartitionWithOps, outputDir string, opera
 		defer oldFile.Close()
 	}
 
-	// compute readable size for the partition to include in progress reports
-	var sizeInBlocks uint64
+	var blocks uint64
 	for _, operation := range part.Partition.GetOperations() {
 		for _, extent := range operation.GetDstExtents() {
-			sizeInBlocks += extent.GetNumBlocks()
+			blocks += extent.GetNumBlocks()
 		}
 	}
-	sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-	sizeReadable := formatSize(sizeInBytes)
+	bytes := blocks * uint64(d.blockSize)
+	readable := fmtSize(bytes)
 
 	var wrappedCallback ProgressCallback
 	if progressCallback != nil {
 		wrappedCallback = func(progress ProgressInfo) {
-			progress.PartitionName = partitionName
-			progress.SizeReadable = sizeReadable
+			progress.PartitionName = name
+			progress.SizeReadable = readable
 			progressCallback(progress)
 		}
 	}
 
-	return d.processOperationsOptimized(part.Operations, outFile, oldFile, operationWorkers, isDiff, wrappedCallback)
-}
-
-func (d *Dumper) processPartitionSingleThreaded(part PartitionWithOps, outputDir string, isDiff bool, oldDir string, progressCallback ProgressCallback) error {
-	partitionName := part.Partition.GetPartitionName()
-
-	outputPath := filepath.Join(outputDir, partitionName+".img")
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToCreateOutputFile, err)
+	workers := min(operationWorkers, len(part.Operations))
+	if len(part.Operations) <= 2 {
+		workers = 1
 	}
-	defer outFile.Close()
-
-	var oldFile *os.File
-	if isDiff {
-		oldPath := filepath.Join(oldDir, partitionName+".img")
-		oldFile, err = os.Open(oldPath)
-		if err != nil {
-			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToOpenOldFile, err)
-		}
-		defer oldFile.Close()
-	}
-
-	// compute readable size for the partition to include in progress reports
-	var sizeInBlocks uint64
-	for _, operation := range part.Partition.GetOperations() {
-		for _, extent := range operation.GetDstExtents() {
-			sizeInBlocks += extent.GetNumBlocks()
-		}
-	}
-	sizeInBytes := sizeInBlocks * uint64(d.blockSize)
-	sizeReadable := formatSize(sizeInBytes)
-
-	var wrappedCallback ProgressCallback
-	if progressCallback != nil {
-		wrappedCallback = func(progress ProgressInfo) {
-			progress.PartitionName = partitionName
-			progress.SizeReadable = sizeReadable
-			progressCallback(progress)
-		}
-	}
-
-	// Process operations sequentially for small partitions
-	return d.processOperationsSingleThreaded(part.Operations, outFile, oldFile, isDiff, wrappedCallback)
+	return d.procOps(part.Operations, outFile, oldFile, workers, isDiff, wrappedCallback)
 }

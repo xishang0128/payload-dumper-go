@@ -83,6 +83,7 @@ type zipFH struct {
 	ExtraFieldLength  uint16
 }
 
+// GetStoredEntryOffset finds the offset and size of a stored entry in a ZIP file
 func GetStoredEntryOffset(reader file.Reader, name string) (int64, int64, error) {
 	size := reader.Size()
 

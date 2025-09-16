@@ -1,4 +1,3 @@
-// Package file provides abstractions for reading payload files from different sources.
 package file
 
 import (
@@ -18,8 +17,7 @@ import (
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 )
 
-// Default User-Agent string for HTTP requests
-var UserAgent string = "curl/7.68.0" // Mimic curl User-Agent for better compatibility
+var UserAgent string = "curl/7.68.0"
 
 // SetUserAgent sets the User-Agent string for HTTP requests
 func SetUserAgent(ua string) {
@@ -28,42 +26,32 @@ func SetUserAgent(ua string) {
 	}
 }
 
-// HTTPClientTimeout controls the timeout used by the HTTP client.
-// Default increased from 10s to 60s to be more tolerant of slow/large range requests.
 var HTTPClientTimeout = 5 * time.Second
 
-// SetHTTPClientTimeout allows adjusting HTTP client timeout programmatically.
+// SetHTTPClientTimeout allows adjusting HTTP client timeout programmatically
 func SetHTTPClientTimeout(d time.Duration) {
 	if d > 0 {
 		HTTPClientTimeout = d
 	}
 }
 
-// HTTPMaxConcurrentRequests controls the maximum number of concurrent HTTP range
-// requests issued by HTTPFile.Read. A value of 0 means unlimited.
 var HTTPMaxConcurrentRequests int
 
-// httpRequestSem is a semaphore used to limit concurrent HTTP requests when
-// HTTPMaxConcurrentRequests > 0. It is lazily initialized when the max is set.
 var httpRequestSem chan struct{}
 
-// HTTPReadCacheSize controls the size of the per-HTTP-file read cache (in bytes).
-// Default 1 MiB. Set to 0 to disable caching.
-var HTTPReadCacheSize int64 = 1 << 20 // 1 MiB
+var HTTPReadCacheSize int64 = 1 << 20
 
-// SetHTTPReadCacheSize allows adjusting read cache size programmatically.
+// SetHTTPReadCacheSize allows adjusting read cache size programmatically
 func SetHTTPReadCacheSize(n int64) {
 	if n >= 0 {
 		HTTPReadCacheSize = n
 	}
 }
 
-// SetHTTPMaxConcurrentRequests sets the maximum number of concurrent HTTP
-// requests. If max <= 0, concurrency is unlimited.
+// SetHTTPMaxConcurrentRequests sets the maximum number of concurrent HTTP requests
 func SetHTTPMaxConcurrentRequests(max int) {
 	HTTPMaxConcurrentRequests = max
 	if max > 0 {
-		// initialize or replace semaphore
 		httpRequestSem = make(chan struct{}, max)
 	} else {
 		httpRequestSem = nil
@@ -78,12 +66,9 @@ type Reader interface {
 	Read(offset int64, size int) ([]byte, error)
 }
 
-// createCustomCertPool creates a certificate pool with built-in certificates
 func createCustomCertPool() *x509.CertPool {
-	// Try to use system cert pool first
 	certPool, err := x509.SystemCertPool()
 	if err != nil {
-		// If system cert pool is not available, create empty pool
 		certPool = x509.NewCertPool()
 		certPool.AppendCertsFromPEM([]byte(BuiltInCerts))
 	}
@@ -91,10 +76,7 @@ func createCustomCertPool() *x509.CertPool {
 	return certPool
 }
 
-// createHTTPClientWithDNS creates an HTTP client with custom DNS configuration
-// For systems without /etc/resolv.conf, it sets up a fallback DNS server
 func createHTTPClientWithDNS() *http.Client {
-	// Check if /etc/resolv.conf exists
 	if _, err := os.Stat("/etc/resolv.conf"); os.IsNotExist(err) {
 		dnsServers := []string{"223.5.5.5:53", "1.1.1.1:53"}
 		fmt.Printf("%s, %s", i18n.I18nMsg.Common.DNSResolvConfNotFound,
@@ -104,7 +86,6 @@ func createHTTPClientWithDNS() *http.Client {
 			Timeout: HTTPClientTimeout,
 		}
 
-		// Create custom resolver with fallback DNS servers
 		resolver := &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -120,7 +101,6 @@ func createHTTPClientWithDNS() *http.Client {
 			},
 		}
 
-		// Create custom transport with custom resolver
 		transport := &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				host, port, err := net.SplitHostPort(addr)
@@ -128,7 +108,6 @@ func createHTTPClientWithDNS() *http.Client {
 					return nil, err
 				}
 
-				// Resolve using custom resolver
 				ips, err := resolver.LookupIPAddr(ctx, host)
 				if err != nil {
 					return nil, err
@@ -138,7 +117,6 @@ func createHTTPClientWithDNS() *http.Client {
 					return nil, fmt.Errorf(i18n.I18nMsg.Common.DNSNoIPAddressesFound, host)
 				}
 
-				// Try to connect to resolved IPs
 				for _, ip := range ips {
 					addr := net.JoinHostPort(ip.IP.String(), port)
 					conn, err := dialer.DialContext(ctx, network, addr)
@@ -166,7 +144,6 @@ func createHTTPClientWithDNS() *http.Client {
 		}
 	}
 
-	// System has /etc/resolv.conf, use default client with custom cert pool
 	return &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -189,9 +166,7 @@ type LocalFile struct {
 	size int64
 }
 
-// NewLocalFile opens a local file for reading.
-// The file must exist and be readable.
-// Returns a LocalFile that implements the Reader interface.
+// NewLocalFile opens a local file for reading
 func NewLocalFile(path string) (*LocalFile, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -243,10 +218,7 @@ type HTTPFile struct {
 	cacheMu    sync.Mutex
 }
 
-// NewHTTPFile opens an HTTP URL for reading.
-// The server must support range requests (Accept-Ranges: bytes).
-// Returns an HTTPFile that implements the Reader interface.
-// For systems without /etc/resolv.conf, it automatically configures fallback DNS.
+// NewHTTPFile opens an HTTP URL for reading
 func NewHTTPFile(url string) (*HTTPFile, error) {
 	client := createHTTPClientWithDNS()
 
@@ -297,7 +269,6 @@ func (f *HTTPFile) ReadAt(p []byte, off int64) (n int, err error) {
 }
 
 func (f *HTTPFile) Close() error {
-	// HTTP client doesn't need explicit closing for our use case
 	return nil
 }
 
@@ -315,20 +286,14 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 		endPos = f.size - 1
 	}
 
-	// Simple read cache: if the requested range is fully inside the cache, return from cache.
-	// Otherwise, fetch a larger block (HTTPReadCacheSize or at least requested size) and populate cache.
 	const maxRetries = 3
 	var lastErr error
 	expectedSize := endPos - offset + 1
-
-	// Serve from cache if enabled and hit
 	if HTTPReadCacheSize > 0 {
 		f.cacheMu.Lock()
 		if f.cache != nil && offset >= f.cacheStart && endPos <= f.cacheEnd {
-			// cache hit — perform safe int conversions and bounds checks
 			start64 := offset - f.cacheStart
 			reqLen64 := expectedSize
-			// convert to int after checking sizes
 			if start64 >= 0 && reqLen64 >= 0 {
 				iStart := int(start64)
 				iLen := int(reqLen64)
@@ -344,20 +309,17 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 		f.cacheMu.Unlock()
 	}
 
-	// Determine fetch size
 	fetchSize := expectedSize
 	if HTTPReadCacheSize > 0 && HTTPReadCacheSize > fetchSize {
 		fetchSize = HTTPReadCacheSize
 	}
 
-	// If a global semaphore is set, acquire a token to limit concurrent HTTP requests
 	if httpRequestSem != nil {
 		httpRequestSem <- struct{}{}
 		defer func() { <-httpRequestSem }()
 	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// adjust fetch range to not exceed file size
 		fetchEnd := offset + fetchSize - 1
 		if fetchEnd >= f.size {
 			fetchEnd = f.size - 1
@@ -401,7 +363,6 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 			return nil, lastErr
 		}
 
-		// Read fetched body
 		fetchedLen := fetchEnd - offset + 1
 		fetchedData := make([]byte, fetchedLen)
 		n, err := io.ReadFull(resp.Body, fetchedData)
@@ -423,9 +384,7 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 			return nil, err
 		}
 
-		// If caching enabled, store fetchedData into cache
 		if HTTPReadCacheSize > 0 {
-			// Ensure we fetched at least the requested bytes
 			if int64(len(fetchedData)) < expectedSize {
 				lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteReadUnexpectedEOF, rangeHeader, n, fetchedLen)
 				if attempt < maxRetries {
@@ -436,13 +395,11 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 			}
 
 			f.cacheMu.Lock()
-			// store full fetchedData as cache (simple policy)
 			f.cache = make([]byte, len(fetchedData))
 			copy(f.cache, fetchedData)
 			f.cacheStart = offset
 			f.cacheEnd = offset + int64(len(fetchedData)) - 1
 			f.cacheMu.Unlock()
-			// return requested slice directly from fetchedData to avoid any cache races
 			data := make([]byte, int(expectedSize))
 			copy(data, fetchedData[0:int(expectedSize)])
 			return data, nil
@@ -452,7 +409,6 @@ func (f *HTTPFile) Read(offset int64, size int) ([]byte, error) {
 			return fetchedData[:expectedSize], nil
 		}
 
-		// Shouldn't normally reach here; treat as error
 		lastErr = fmt.Errorf(i18n.I18nMsg.Common.HTTPReadFailedAfterRetries)
 		if attempt < maxRetries {
 			time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)

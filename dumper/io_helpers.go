@@ -13,15 +13,14 @@ import (
 	"github.com/xishang0128/payload-dumper-go/common/metadata"
 )
 
-func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.File, oldFile *os.File, operationWorkers int, isDiff bool, progressCallback ProgressCallback) error {
-	if operationWorkers <= 0 {
-		operationWorkers = runtime.NumCPU()
+func (d *Dumper) procOps(operations []Operation, outFile *os.File, oldFile *os.File, opWorkers int, isDiff bool, progressCallback ProgressCallback) error {
+	if opWorkers <= 0 {
+		opWorkers = runtime.NumCPU()
 	}
 
-	// Use nil placeholders to avoid preallocating large buffers. Allocate on demand in workers.
-	bufferPool := make(chan []byte, operationWorkers)
-	for i := 0; i < operationWorkers; i++ {
-		bufferPool <- nil
+	bufPool := make(chan []byte, opWorkers)
+	for i := 0; i < opWorkers; i++ {
+		bufPool <- nil
 	}
 
 	type workItem struct {
@@ -29,39 +28,39 @@ func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.
 		op    Operation
 	}
 
-	workChan := make(chan workItem, operationWorkers*2)
+	workChan := make(chan workItem, opWorkers*2)
 	resultChan := make(chan error, len(operations))
 
-	workerCount := min(operationWorkers, len(operations))
+	workerCount := min(opWorkers, len(operations))
 
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
 
 	totalOps := len(operations)
-	var completedOps int64
-	var progressMutex sync.Mutex
+	var completed int64
+	var progMutex sync.Mutex
 
 	for range workerCount {
 		go func() {
 			defer wg.Done()
 			for item := range workChan {
-				err := d.processOperationOptimized(item.op, outFile, oldFile, isDiff, bufferPool)
+				err := d.procOp(item.op, outFile, oldFile, isDiff, bufPool)
 				resultChan <- err
 
 				if progressCallback != nil {
-					progressMutex.Lock()
-					completedOps++
-					current := int(completedOps)
-					progressPercent := float64(current) / float64(totalOps) * 100
-					progressMutex.Unlock()
+					progMutex.Lock()
+					completed++
+					current := int(completed)
+					percent := float64(current) / float64(totalOps) * 100
+					progMutex.Unlock()
 
-					progressInfo := ProgressInfo{
+					info := ProgressInfo{
 						PartitionName:   "",
 						TotalOperations: totalOps,
 						CompletedOps:    current,
-						ProgressPercent: progressPercent,
+						ProgressPercent: percent,
 					}
-					progressCallback(progressInfo)
+					progressCallback(info)
 				}
 			}
 		}()
@@ -88,98 +87,25 @@ func (d *Dumper) processOperationsOptimized(operations []Operation, outFile *os.
 	return nil
 }
 
-// processOperationsSingleThreaded processes operations sequentially without multi-threading
-func (d *Dumper) processOperationsSingleThreaded(operations []Operation, outFile *os.File, oldFile *os.File, isDiff bool, progressCallback ProgressCallback) error {
-	totalOps := len(operations)
-
-	for i, op := range operations {
-		err := d.processOperationSingleThreaded(op, outFile, oldFile, isDiff)
-		if err != nil {
-			return err
-		}
-
-		// Report progress
-		if progressCallback != nil {
-			progressPercent := float64(i+1) / float64(totalOps) * 100
-			progressInfo := ProgressInfo{
-				PartitionName:   "",
-				TotalOperations: totalOps,
-				CompletedOps:    i + 1,
-				ProgressPercent: progressPercent,
-			}
-			progressCallback(progressInfo)
-		}
-	}
-
-	return nil
-}
-
-// processOperationSingleThreaded processes a single operation without buffer pool optimization
-func (d *Dumper) processOperationSingleThreaded(op Operation, outFile *os.File, oldFile *os.File, isDiff bool) error {
+func (d *Dumper) procOp(op Operation, outFile *os.File, oldFile *os.File, isDiff bool, bufPool chan []byte) error {
 	operation := op.Operation
 
 	var data []byte
 	var err error
 
 	if op.Length > 0 {
-		data, err = d.payloadFile.Read(op.Offset, int(op.Length))
-		if err != nil {
-			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToReadOperationData, err)
-		}
-	}
-
-	switch operation.GetType() {
-	case metadata.InstallOperation_REPLACE:
-		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), data)
-
-	case metadata.InstallOperation_REPLACE_BZ:
-		reader := bzip2.NewReader(bytes.NewReader(data))
-		decompressed, err := io.ReadAll(reader)
-		if err != nil {
-			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressBzip2, err)
-		}
-		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), decompressed)
-
-	case metadata.InstallOperation_REPLACE_XZ:
-		decompressed, err := decompressXZ(data)
-		if err != nil {
-			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressXZ, err)
-		}
-		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), decompressed)
-
-	case metadata.InstallOperation_SOURCE_COPY:
-		if !isDiff {
-			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorSourceCopyOnlyForDiff)
-		}
-		return d.sourceCopyThreadSafe(outFile, oldFile, operation)
-
-	case metadata.InstallOperation_ZERO:
-		return d.writeZerosThreadSafe(outFile, operation.GetDstExtents())
-
-	default:
-		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorUnsupportedOperationType, operation.GetType())
-	}
-}
-
-func (d *Dumper) processOperationOptimized(op Operation, outFile *os.File, oldFile *os.File, isDiff bool, bufferPool chan []byte) error {
-	operation := op.Operation
-
-	var data []byte
-	var err error
-
-	if op.Length > 0 {
-		buffer := <-bufferPool
+		buf := <-bufPool
 		defer func() {
-			if buffer == nil {
-				bufferPool <- nil
+			if buf == nil {
+				bufPool <- nil
 				return
 			}
-			buffer = buffer[:0]
-			bufferPool <- buffer
+			buf = buf[:0]
+			bufPool <- buf
 		}()
 
 		need := int(op.Length)
-		if buffer == nil || cap(buffer) < need {
+		if buf == nil || cap(buf) < need {
 			alloc := max(need, 64*1024)
 			if int64(alloc) > MaxBufferSize {
 				alloc = int(MaxBufferSize)
@@ -187,9 +113,9 @@ func (d *Dumper) processOperationOptimized(op Operation, outFile *os.File, oldFi
 			if alloc < need {
 				alloc = need
 			}
-			buffer = make([]byte, alloc)
+			buf = make([]byte, alloc)
 		}
-		buffer = buffer[:need]
+		buf = buf[:need]
 
 		data, err = d.payloadFile.Read(op.Offset, int(op.Length))
 		if err != nil {
@@ -199,7 +125,7 @@ func (d *Dumper) processOperationOptimized(op Operation, outFile *os.File, oldFi
 
 	switch operation.GetType() {
 	case metadata.InstallOperation_REPLACE:
-		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), data)
+		return d.writeExtents(outFile, operation.GetDstExtents(), data)
 
 	case metadata.InstallOperation_REPLACE_BZ:
 		reader := bzip2.NewReader(bytes.NewReader(data))
@@ -207,59 +133,59 @@ func (d *Dumper) processOperationOptimized(op Operation, outFile *os.File, oldFi
 		if err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressBzip2, err)
 		}
-		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), decompressed)
+		return d.writeExtents(outFile, operation.GetDstExtents(), decompressed)
 
 	case metadata.InstallOperation_REPLACE_XZ:
 		decompressed, err := decompressXZ(data)
 		if err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressXZ, err)
 		}
-		return d.writeToExtentsThreadSafe(outFile, operation.GetDstExtents(), decompressed)
+		return d.writeExtents(outFile, operation.GetDstExtents(), decompressed)
 
 	case metadata.InstallOperation_SOURCE_COPY:
 		if !isDiff {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorSourceCopyOnlyForDiff)
 		}
-		return d.sourceCopyThreadSafe(outFile, oldFile, operation)
+		return d.srcCopy(outFile, oldFile, operation)
 
 	case metadata.InstallOperation_ZERO:
-		return d.writeZerosThreadSafe(outFile, operation.GetDstExtents())
+		return d.writeZeros(outFile, operation.GetDstExtents())
 
 	default:
 		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorUnsupportedOperationType, operation.GetType())
 	}
 }
 
-func (d *Dumper) writeToExtentsThreadSafe(outFile *os.File, extents []*metadata.Extent, data []byte) error {
-	dataOffset := 0
+func (d *Dumper) writeExtents(outFile *os.File, extents []*metadata.Extent, data []byte) error {
+	offset := 0
 	for _, extent := range extents {
-		blockOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
-		blockSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
+		blkOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
+		blkSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
 
-		if dataOffset+int(blockSize) > len(data) {
-			blockSize = int64(len(data) - dataOffset)
+		if offset+int(blkSize) > len(data) {
+			blkSize = int64(len(data) - offset)
 		}
 
-		if blockSize <= 0 {
+		if blkSize <= 0 {
 			break
 		}
 
-		if _, err := outFile.WriteAt(data[dataOffset:dataOffset+int(blockSize)], blockOffset); err != nil {
+		if _, err := outFile.WriteAt(data[offset:offset+int(blkSize)], blkOffset); err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToWriteToFile, err)
 		}
 
-		dataOffset += int(blockSize)
+		offset += int(blkSize)
 	}
 	return nil
 }
 
-func (d *Dumper) sourceCopyThreadSafe(outFile *os.File, oldFile *os.File, operation *metadata.InstallOperation) error {
+func (d *Dumper) srcCopy(outFile *os.File, oldFile *os.File, operation *metadata.InstallOperation) error {
 	for _, srcExtent := range operation.GetSrcExtents() {
-		blockOffset := int64(srcExtent.GetStartBlock()) * int64(d.blockSize)
-		blockSize := int64(srcExtent.GetNumBlocks()) * int64(d.blockSize)
+		blkOffset := int64(srcExtent.GetStartBlock()) * int64(d.blockSize)
+		blkSize := int64(srcExtent.GetNumBlocks()) * int64(d.blockSize)
 
-		data := make([]byte, blockSize)
-		if _, err := oldFile.ReadAt(data, blockOffset); err != nil {
+		data := make([]byte, blkSize)
+		if _, err := oldFile.ReadAt(data, blkOffset); err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToReadFromOldFile, err)
 		}
 
@@ -271,35 +197,35 @@ func (d *Dumper) sourceCopyThreadSafe(outFile *os.File, oldFile *os.File, operat
 	return nil
 }
 
-func (d *Dumper) writeZerosThreadSafe(outFile *os.File, extents []*metadata.Extent) error {
-	const maxZeroChunk = 1024 * 1024
-	var zeroBuffer []byte
+func (d *Dumper) writeZeros(outFile *os.File, extents []*metadata.Extent) error {
+	const maxChunk = 1024 * 1024
+	var zeroBuf []byte
 
 	for _, extent := range extents {
-		blockOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
-		blockSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
+		blkOffset := int64(extent.GetStartBlock()) * int64(d.blockSize)
+		blkSize := int64(extent.GetNumBlocks()) * int64(d.blockSize)
 
-		remaining := blockSize
-		offset := blockOffset
+		rem := blkSize
+		pos := blkOffset
 
-		for remaining > 0 {
-			chunkSize := min(remaining, maxZeroChunk)
+		for rem > 0 {
+			chunk := min(rem, maxChunk)
 
-			if len(zeroBuffer) < int(chunkSize) {
-				zeroBuffer = make([]byte, chunkSize)
+			if len(zeroBuf) < int(chunk) {
+				zeroBuf = make([]byte, chunk)
 			} else {
-				zeroBuffer = zeroBuffer[:chunkSize]
-				for i := range zeroBuffer {
-					zeroBuffer[i] = 0
+				zeroBuf = zeroBuf[:chunk]
+				for i := range zeroBuf {
+					zeroBuf[i] = 0
 				}
 			}
 
-			if _, err := outFile.WriteAt(zeroBuffer, offset); err != nil {
+			if _, err := outFile.WriteAt(zeroBuf, pos); err != nil {
 				return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToWriteZeros, err)
 			}
 
-			remaining -= chunkSize
-			offset += chunkSize
+			rem -= chunk
+			pos += chunk
 		}
 	}
 	return nil
