@@ -13,6 +13,7 @@ import (
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 	"github.com/xishang0128/payload-dumper-go/common/metadata"
 	"github.com/xishang0128/payload-dumper-go/common/ziputil"
+	"github.com/xishang0128/payload-dumper-go/compression"
 )
 
 func (d *Dumper) Close() error {
@@ -26,7 +27,8 @@ func (d *Dumper) Close() error {
 func New(reader file.Reader) (*Dumper, error) {
 	i18n.InitLanguage()
 	dumper := &Dumper{
-		payloadFile: reader,
+		payloadFile:        reader,
+		compressionManager: compression.NewDecompressorManager(),
 	}
 
 	if offset, _, err := ziputil.GetStoredEntryOffset(reader, "payload.bin"); err == nil {

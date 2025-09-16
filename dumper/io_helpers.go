@@ -1,16 +1,14 @@
 package dumper
 
 import (
-	"bytes"
-	"compress/bzip2"
 	"fmt"
-	"io"
 	"os"
 	"runtime"
 	"sync"
 
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 	"github.com/xishang0128/payload-dumper-go/common/metadata"
+	"github.com/xishang0128/payload-dumper-go/compression"
 )
 
 func (d *Dumper) procOps(operations []Operation, outFile *os.File, oldFile *os.File, opWorkers int, isDiff bool, progressCallback ProgressCallback) error {
@@ -128,17 +126,30 @@ func (d *Dumper) procOp(op Operation, outFile *os.File, oldFile *os.File, isDiff
 		return d.writeExtents(outFile, operation.GetDstExtents(), data)
 
 	case metadata.InstallOperation_REPLACE_BZ:
-		reader := bzip2.NewReader(bytes.NewReader(data))
-		decompressed, err := io.ReadAll(reader)
+		decompressed, err := d.compressionManager.Decompress(compression.TypeBzip2, data)
 		if err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressBzip2, err)
 		}
 		return d.writeExtents(outFile, operation.GetDstExtents(), decompressed)
 
 	case metadata.InstallOperation_REPLACE_XZ:
-		decompressed, err := decompressXZ(data)
+		decompressed, err := d.compressionManager.Decompress(compression.TypeXZ, data)
 		if err != nil {
 			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressXZ, err)
+		}
+		return d.writeExtents(outFile, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_ZSTD:
+		decompressed, err := d.compressionManager.Decompress(compression.TypeZSTD, data)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressZSTD, err)
+		}
+		return d.writeExtents(outFile, operation.GetDstExtents(), decompressed)
+
+	case metadata.InstallOperation_BROTLI_BSDIFF:
+		decompressed, err := d.compressionManager.Decompress(compression.TypeBrotli, data)
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToDecompressBrotli, err)
 		}
 		return d.writeExtents(outFile, operation.GetDstExtents(), decompressed)
 

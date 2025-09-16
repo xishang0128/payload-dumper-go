@@ -2,7 +2,7 @@ module github.com/xishang0128/payload-dumper-go
 
 go 1.23.0
 
-require google.golang.org/protobuf v1.31.0
+require google.golang.org/protobuf v1.36.9
 
 require (
 	github.com/spf13/cobra v1.10.1
@@ -12,7 +12,11 @@ require (
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
+	github.com/andybalholm/brotli v1.2.0
+	github.com/google/brotli/go/cbrotli v1.1.0
+	github.com/klauspost/compress v1.18.0
 	github.com/spencercw/go-xz v0.0.0-20181128201811-c82a2123b492
+	github.com/valyala/gozstd v1.23.2
 )
 
 require (
