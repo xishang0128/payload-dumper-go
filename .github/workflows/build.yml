@@ -142,11 +142,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Checkout liblzma
+      - name: Checkout compression-libs
+        if: matrix.goos == 'android' && matrix.cgo == true
         uses: actions/checkout@v4
         with:
-          repository: xishang0128/liblzma-android
-          path: liblzma
+          repository: xishang0128/compression-android-arm64
+          path: compression-libs
 
       - name: Update built-in CA certificates
         run: |
@@ -158,21 +159,22 @@ jobs:
           go-version: '1.25'
 
       - name: Setup Android SDK
-        if: ${{ matrix.goos == 'android' }}
+        if: ${{ matrix.goos == 'android' && matrix.cgo == true }}
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r29-beta1
+          ndk-version: r29-beta4
 
       - name: Install Linux dependencies for CGO
         if: matrix.goos == 'linux' && matrix.cgo == true
         run: |
           sudo apt-get update
-          sudo apt-get install -y liblzma-dev pkg-config
-          # For static builds, also install static libraries
-          if [[ "${{ matrix.static }}" == "true" ]]; then
-            sudo apt-get install -y liblzma-dev:$(dpkg --print-architecture) musl-dev
-          fi
+          sudo apt-get install -y liblzma-dev pkg-config libbrotli-dev
+
+      - name: Install macOS dependencies for CGO
+        if: matrix.goos == 'darwin' && matrix.cgo == true
+        run: |
+          brew install xz brotli
 
       - name: Setup MSYS2 for Windows x86_64
         if: matrix.goos == 'windows' && matrix.cgo == true && matrix.goarch == 'amd64' && matrix.compiler == 'mingw'
@@ -183,6 +185,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-xz
+            mingw-w64-x86_64-brotli
             mingw-w64-x86_64-pkg-config
 
       - name: Setup MSYS2 for Windows ARM64 (Clang toolchain)
@@ -194,6 +197,8 @@ jobs:
           install: >-
             mingw-w64-clang-aarch64-gcc
             mingw-w64-clang-aarch64-xz
+            mingw-w64-clang-aarch64-brotli
+            mingw-w64-clang-aarch64-zstd
             mingw-w64-clang-aarch64-pkg-config
 
       - name: Set Environment Variables
@@ -211,9 +216,20 @@ jobs:
           echo "BUILDTIME=$(date)" >> $GITHUB_ENV
 
       - name: Set Environment Variables for Android
-        if: ${{ matrix.goos == 'android' }}
+        if: ${{ matrix.goos == 'android' && matrix.cgo == true }}
         run: |
-          echo "CC=${{steps.setup-ndk.outputs.ndk-path}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang" >> $GITHUB_ENV
+          ANDROID_NDK_ROOT="${{steps.setup-ndk.outputs.ndk-path}}"
+          TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          TARGET="aarch64-linux-android35"
+          
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "TARGET=$TARGET" >> $GITHUB_ENV
+          echo "CC=$TOOLCHAIN/bin/$TARGET-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/bin/$TARGET-clang++" >> $GITHUB_ENV
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
 
       - name: Set Environment Variables for Windows
         if: matrix.goos == 'windows' && matrix.cgo == true && matrix.compiler == 'mingw'
@@ -239,9 +255,9 @@ jobs:
           echo "CGO_CFLAGS=-I${MINGW_ROOT}/include" >> $GITHUB_ENV
           
           if [[ "${{ matrix.static }}" == "true" ]]; then
-            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -Wl,-Bstatic -llzma -Wl,-Bdynamic" >> $GITHUB_ENV
+            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -Wl,-Bstatic -llzma -lzstd -Wl,-Bdynamic" >> $GITHUB_ENV
           else
-            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -llzma" >> $GITHUB_ENV
+            echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -llzma -lbrotlidec -lbrotlicommon -lzstd" >> $GITHUB_ENV
           fi
           echo "CPATH=${MINGW_ROOT}/include" >> $GITHUB_ENV
           echo "LIBRARY_PATH=${MINGW_ROOT}/lib" >> $GITHUB_ENV
@@ -258,12 +274,13 @@ jobs:
         run: |
           if [[ "${{ matrix.static }}" == "true" ]]; then
             CGO_CFLAGS="$(pkg-config --cflags liblzma)" \
-            CGO_LDFLAGS="$(pkg-config --libs --static liblzma)" \
-            go build -a \
+            CGO_LDFLAGS="$(pkg-config --libs --static liblzma) -Wl,--allow-multiple-definition" \
+            go build -tags="cgo_xz cgo_zstd pure_brotli" -a \
               -ldflags="-linkmode external -extldflags '-static' -s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
-              -o bin/${{ matrix.output }} \
-              ./cmd/payload-dumper
+              -o bin/${{ matrix.output }} ./cmd/payload-dumper
           else
+            CGO_CFLAGS="$(pkg-config --cflags liblzma libbrotlidec)" \
+            CGO_LDFLAGS="$(pkg-config --libs liblzma libbrotlidec)" \
             go build \
               -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
               -o bin/${{ matrix.output }} ./cmd/payload-dumper
@@ -280,21 +297,20 @@ jobs:
         run: |
           if [[ "${{ matrix.static }}" == "true" ]]; then
             if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-              CGO_CFLAGS="-I/opt/homebrew/opt/xz/include" \
-              CGO_LDFLAGS="/opt/homebrew/opt/xz/lib/liblzma.a" \
-              go build \
-                -a -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
-                -o bin/${{ matrix.output }} ./cmd/payload-dumper
-            else 
-              CGO_CFLAGS="-I/usr/local/opt/xz/include" \
-              CGO_LDFLAGS="/usr/local/opt/xz/lib/liblzma.a" \
-              go build \
-                -a -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
-                -o bin/${{ matrix.output }} ./cmd/payload-dumper
+              XZ_PREFIX="/opt/homebrew/opt/xz"
+            else
+              XZ_PREFIX="/usr/local/opt/xz"
             fi
+            CGO_CFLAGS="-I$XZ_PREFIX/include" \
+            CGO_LDFLAGS="$XZ_PREFIX/lib/liblzma.a -Wl,-search_paths_first" \
+            go build -tags="cgo_xz cgo_zstd pure_brotli" \
+              -a -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
+              -o bin/${{ matrix.output }} ./cmd/payload-dumper
           else
-            CGO_CFLAGS="-I/opt/homebrew/opt/xz/include" \
-            CGO_LDFLAGS="-L/opt/homebrew/opt/xz/lib" \
+            XZ_PREFIX="/opt/homebrew/opt/xz"
+            BROTLI_PREFIX="/opt/homebrew/opt/brotli"
+            CGO_CFLAGS="-I$XZ_PREFIX/include -I$BROTLI_PREFIX/include" \
+            CGO_LDFLAGS="-L$XZ_PREFIX/lib -L$BROTLI_PREFIX/lib" \
             go build \
               -ldflags="-s -w -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
               -o bin/${{ matrix.output }} ./cmd/payload-dumper
@@ -328,8 +344,57 @@ jobs:
           CGO_ENABLED: 1
         shell: bash
         run: |
-          CGO_CFLAGS="-I$(pwd)/liblzma/android-arm64/include" \
-          CGO_LDFLAGS="-L$(pwd)/liblzma/android-arm64/lib -Wl,-rpath,/data/data/com.termux/files/usr/lib" \
+          ANDROID_LIBS_DIR="$(pwd)/compression-libs"
+          
+          echo "Verifying required libraries..."
+          MISSING_LIBS=()
+          
+          # Check header files
+          if [[ ! -f "$ANDROID_LIBS_DIR/include/lzma.h" ]]; then
+            MISSING_LIBS+=("lzma.h (XZ)")
+          fi
+          if [[ ! -f "$ANDROID_LIBS_DIR/include/brotli/decode.h" ]]; then
+            MISSING_LIBS+=("brotli headers")
+          fi
+          if [[ ! -f "$ANDROID_LIBS_DIR/include/bzlib.h" ]]; then
+            MISSING_LIBS+=("bzlib.h (bzip2)")
+          fi
+          if [[ ! -f "$ANDROID_LIBS_DIR/include/zstd.h" ]]; then
+            MISSING_LIBS+=("zstd.h")
+          fi
+          
+          # Check library files
+          if [[ ! -f "$ANDROID_LIBS_DIR/lib/liblzma.so" ]]; then
+            MISSING_LIBS+=("liblzma.so")
+          fi
+          if [[ ! -f "$ANDROID_LIBS_DIR/lib/libbrotlidec.so" ]]; then
+            MISSING_LIBS+=("libbrotlidec.so")
+          fi
+          if [[ ! -f "$ANDROID_LIBS_DIR/lib/libzstd.so" ]]; then
+            MISSING_LIBS+=("libzstd.so")
+          fi
+          
+          if [[ ${#MISSING_LIBS[@]} -gt 0 ]]; then
+            echo "❌ Missing required libraries:"
+            for lib in "${MISSING_LIBS[@]}"; do
+              echo "   - $lib"
+            done
+            echo ""
+            echo "Please ensure all Android ARM64 libraries are compiled and placed in:"
+            echo "  Headers: $ANDROID_LIBS_DIR/include/"
+            echo "  Libraries: $ANDROID_LIBS_DIR/lib/"
+            exit 1
+          fi
+          
+          echo "✅ All required libraries found!"
+          
+          # Set CGO flags for Android ARM64 libraries
+          CGO_CFLAGS="-I$ANDROID_LIBS_DIR/include"
+          CGO_LDFLAGS="-L$ANDROID_LIBS_DIR/lib -llzma -lbrotlidec -lbrotlienc -lbrotlicommon -lbz2 -lzstd -Wl,-rpath,/data/data/com.termux/files/usr/lib"
+          
+          echo "📦 Building with CGO (Android ARM64 native libraries)..."
+          CGO_CFLAGS="$CGO_CFLAGS" \
+          CGO_LDFLAGS="$CGO_LDFLAGS" \
           go build \
             -a -ldflags="-s -w -linkmode external -extldflags '-Wl,-rpath,/data/data/com.termux/files/usr/lib' -X 'github.com/xishang0128/payload-dumper-go/constant.Version=${VERSION}' -X 'github.com/xishang0128/payload-dumper-go/constant.BuildTime=${BUILDTIME}'" \
             -o bin/${{ matrix.output }} ./cmd/payload-dumper

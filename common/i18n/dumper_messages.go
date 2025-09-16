@@ -14,6 +14,7 @@ type DumperMessages struct {
 	ErrorFailedToDecompressBrotli  string
 	ErrorFailedToCreateXZReader    string
 	ErrorFailedToDecompressXZ      string
+	ErrorFailedToDecompressZSTD    string
 	ErrorFailedToApplyBspatch      string
 	ErrorSourceCopyOnlyForDiff     string
 	ErrorUnsupportedOperationType  string
@@ -64,6 +65,7 @@ var EnglishDumperMessages = DumperMessages{
 	ErrorFailedToDecompressBrotli:  "failed to decompress brotli data: %v",
 	ErrorFailedToCreateXZReader:    "failed to create xz reader: %v",
 	ErrorFailedToDecompressXZ:      "failed to decompress xz data: %v",
+	ErrorFailedToDecompressZSTD:    "failed to decompress zstd data: %v",
 	ErrorFailedToApplyBspatch:      "failed to apply bspatch: %v",
 	ErrorSourceCopyOnlyForDiff:     "SOURCE_COPY supported only for differential OTA",
 	ErrorUnsupportedOperationType:  "unsupported operation type: %v",
@@ -114,6 +116,7 @@ var ChineseDumperMessages = DumperMessages{
 	ErrorFailedToDecompressBrotli:  "解压brotli数据失败: %v",
 	ErrorFailedToCreateXZReader:    "创建xz读取器失败: %v",
 	ErrorFailedToDecompressXZ:      "解压xz数据失败: %v",
+	ErrorFailedToDecompressZSTD:    "解压zstd数据失败: %v",
 	ErrorFailedToApplyBspatch:      "应用 bspatch 失败: %v",
 	ErrorSourceCopyOnlyForDiff:     "SOURCE_COPY 操作仅支持差分 OTA",
 	ErrorUnsupportedOperationType:  "不支持的操作类型: %v",
