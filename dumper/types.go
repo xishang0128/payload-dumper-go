@@ -21,7 +21,7 @@ type Dumper struct {
 	blockSize   uint32
 }
 
-var MaxBufferSize int64 = 64 * 1024 * 1024
+var MaxBufferSize int64 = 16 * 1024 * 1024
 
 var MultithreadThreshold uint64 = 128 * 1024 * 1024
 

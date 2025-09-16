@@ -3,6 +3,7 @@ package dumper
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/xishang0128/payload-dumper-go/common/i18n"
 )
@@ -16,6 +17,14 @@ const (
 
 func (d *Dumper) extractSeq(parts []*PartitionWithOps, outputDir string, cpuCount int, progressCallback ProgressCallback) error {
 	for _, part := range parts {
+		if d.isSmall(part) {
+			err := d.procSmall(part, outputDir, false, "", progressCallback)
+			if err != nil {
+				return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToProcessPartition, part.Partition.GetPartitionName(), err)
+			}
+			continue
+		}
+
 		var opWorkers int
 		if d.ShouldUseMultithread(part.Partition) {
 			opWorkers = max(2, cpuCount*3/4)
@@ -37,12 +46,21 @@ func (d *Dumper) extractAdaptive(parts []*PartitionWithOps, outputDir string, cp
 		partition  *PartitionWithOps
 		complexity int
 		priority   int
+		isSmall    bool
 	}
 
 	queue := make([]*partitionWork, 0, len(parts))
 	totalComp := 0
 
+	smallParts := make([]*PartitionWithOps, 0)
+	balancer := GetGlobalBalancer()
+
 	for _, part := range parts {
+		if d.isSmall(part) {
+			smallParts = append(smallParts, part)
+			continue
+		}
+
 		comp := 1
 		prio := 1
 
@@ -58,9 +76,23 @@ func (d *Dumper) extractAdaptive(parts []*PartitionWithOps, outputDir string, cp
 			partition:  part,
 			complexity: comp,
 			priority:   prio,
+			isSmall:    false,
 		}
 		queue = append(queue, work)
 		totalComp += comp
+	}
+
+	for _, part := range smallParts {
+		for !balancer.acquire() {
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		err := d.procSmall(part, outputDir, false, "", progressCallback)
+		balancer.release()
+
+		if err != nil {
+			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorFailedToProcessPartition, part.Partition.GetPartitionName(), err)
+		}
 	}
 
 	for i := 0; i < len(queue)-1; i++ {
@@ -91,7 +123,14 @@ func (d *Dumper) extractAdaptive(parts []*PartitionWithOps, outputDir string, cp
 			defer wg.Done()
 
 			for work := range workChan {
-				opWorkers := d.calcOpWorkers(cpuCount, work.complexity, compCount, len(parts))
+				partSize := d.size(work.partition.Partition)
+				var opWorkers int
+				if partSize > 1024*1024*1024 {
+					balancer := GetGlobalBalancer()
+					opWorkers = balancer.largeWorkers(int64(partSize))
+				} else {
+					opWorkers = d.calcOpWorkers(cpuCount, work.complexity, compCount, len(parts))
+				}
 
 				err := d.processPartAdaptive(work.partition, outputDir, opWorkers, progressCallback)
 				if err != nil {
@@ -164,28 +203,29 @@ func (d *Dumper) extractSingle(part *PartitionWithOps, outputDir string, cpuCoun
 		MaxBufferSize = origBuf
 	}()
 
+	MaxBufferSize = min(MaxBufferSize, 8*1024*1024)
+
 	var opWorkers int
-	sizeInBytes := d.size(part.Partition)
-	operationCount := len(part.Operations)
+	bytes := d.size(part.Partition)
+	opCount := len(part.Operations)
 
 	if d.ShouldUseMultithread(part.Partition) {
-		if operationCount > cpuCount*2 {
+		if opCount > cpuCount*2 {
 			opWorkers = cpuCount
 		} else {
 			opWorkers = max(2, cpuCount*3/4)
 		}
 
-		if sizeInBytes > 1024*1024*1024 {
+		if bytes > 1024*1024*1024 {
 			opWorkers = min(cpuCount+2, cpuCount*5/4)
-			MaxBufferSize = min(256*1024*1024, MaxBufferSize*4)
 		}
 	} else {
-		if operationCount > cpuCount {
+		if opCount > cpuCount {
 			opWorkers = max(2, cpuCount*3/4)
-		} else if operationCount > 2 {
+		} else if opCount > 2 {
 			opWorkers = max(2, cpuCount/2)
 		} else {
-			opWorkers = max(1, min(operationCount, cpuCount/4))
+			opWorkers = max(1, min(opCount, cpuCount/4))
 		}
 	}
 
