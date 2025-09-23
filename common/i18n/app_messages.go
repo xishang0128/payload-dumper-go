@@ -16,6 +16,15 @@ type AppMessages struct {
 	PerformanceSlowAdvice  string
 	VersionCmdShort        string
 	VersionCmdLong         string
+
+	// Compression algorithm messages
+	CompressionImplementationsTitle string
+	PureGoImplementation            string
+	CGOImplementation               string
+	CGOPerformanceMessage           string
+	PureGoPerformanceMessage        string
+	PerformanceAdvice               string
+	CompatibilityLabel              string
 }
 
 // English app messages
@@ -36,6 +45,14 @@ list available partitions, and extract metadata.`,
 	PerformanceSlowAdvice:  "For better performance, rebuild with CGO enabled and liblzma installed",
 	VersionCmdShort:        "Show version information",
 	VersionCmdLong:         "Display version information including XZ implementation details",
+
+	CompressionImplementationsTitle: "Compression Algorithm Implementations:",
+	PureGoImplementation:            "Pure Go",
+	CGOImplementation:               "CGO",
+	CGOPerformanceMessage:           "✅ Some compression algorithms use high-performance CGO implementations",
+	PureGoPerformanceMessage:        "⚠️  All compression algorithms use standard Pure Go implementations",
+	PerformanceAdvice:               "💡 Install relevant C libraries and enable CGO for better performance",
+	CompatibilityLabel:              "[Compatibility]",
 }
 
 // Chinese app messages
@@ -56,4 +73,12 @@ var ChineseAppMessages = AppMessages{
 	PerformanceSlowAdvice:  "如需更好性能，请启用 CGO 并安装 liblzma 重新构建",
 	VersionCmdShort:        "显示版本信息",
 	VersionCmdLong:         "显示版本信息，包括 XZ 实现详情",
+
+	CompressionImplementationsTitle: "压缩算法实现:",
+	PureGoImplementation:            "Pure Go",
+	CGOImplementation:               "CGO",
+	CGOPerformanceMessage:           "✅ 部分压缩算法使用高性能 CGO 实现",
+	PureGoPerformanceMessage:        "⚠️  所有压缩算法使用标准 Pure Go 实现",
+	PerformanceAdvice:               "💡 安装相关 C 库并启用 CGO 可获得更好的性能",
+	CompatibilityLabel:              "[兼容性]",
 }
