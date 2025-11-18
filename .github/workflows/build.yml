@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Tag version to release'
+        description: "Tag version to release"
         required: false
   push:
     branches:
@@ -16,9 +16,9 @@ on:
     tags:
       - v*
     paths-ignore:
-      - 'README.md'
-      - 'README.zh-CN.md'
-      - '.github/ISSUE_TEMPLATE/**'
+      - "README.md"
+      - "README.zh-CN.md"
+      - ".github/ISSUE_TEMPLATE/**"
 
 jobs:
   build:
@@ -40,7 +40,7 @@ jobs:
             cgo: true
             static: true
             output: payload-dumper-linux-arm64-cgo-static
-          - os: macos-13
+          - os: macos-15-intel
             goos: darwin
             goarch: amd64
             goamd64: v3
@@ -70,7 +70,7 @@ jobs:
             output: payload-dumper-windows-arm64-cgo-static-mingw
 
           # Dynamic CGO
-          - os: macos-13
+          - os: macos-15-intel
             goos: darwin
             goarch: amd64
             goamd64: v3
@@ -141,7 +141,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Checkout compression-libs
         if: matrix.goos == 'android' && matrix.cgo == true
         uses: actions/checkout@v4
@@ -156,7 +156,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: "1.25"
 
       - name: Setup Android SDK
         if: ${{ matrix.goos == 'android' && matrix.cgo == true }}
@@ -221,7 +221,7 @@ jobs:
           ANDROID_NDK_ROOT="${{steps.setup-ndk.outputs.ndk-path}}"
           TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           TARGET="aarch64-linux-android35"
-          
+
           echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
           echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
@@ -253,7 +253,7 @@ jobs:
           echo "CC=$GCC_WIN_PATH" >> $GITHUB_ENV
           echo "CXX=$GXX_WIN_PATH" >> $GITHUB_ENV
           echo "CGO_CFLAGS=-I${MINGW_ROOT}/include" >> $GITHUB_ENV
-          
+
           if [[ "${{ matrix.static }}" == "true" ]]; then
             echo "CGO_LDFLAGS=-L${MINGW_ROOT}/lib -Wl,-Bstatic -llzma -lzstd -Wl,-Bdynamic" >> $GITHUB_ENV
           else
@@ -296,11 +296,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.static }}" == "true" ]]; then
-            if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-              XZ_PREFIX="/opt/homebrew/opt/xz"
-            else
-              XZ_PREFIX="/usr/local/opt/xz"
-            fi
+            XZ_PREFIX=$(brew --prefix xz)
             CGO_CFLAGS="-I$XZ_PREFIX/include" \
             CGO_LDFLAGS="$XZ_PREFIX/lib/liblzma.a -Wl,-search_paths_first" \
             go build -tags="cgo_xz cgo_zstd pure_brotli" \
@@ -345,10 +341,10 @@ jobs:
         shell: bash
         run: |
           ANDROID_LIBS_DIR="$(pwd)/compression-libs"
-          
+
           echo "Verifying required libraries..."
           MISSING_LIBS=()
-          
+
           # Check header files
           if [[ ! -f "$ANDROID_LIBS_DIR/include/lzma.h" ]]; then
             MISSING_LIBS+=("lzma.h (XZ)")
@@ -362,7 +358,7 @@ jobs:
           if [[ ! -f "$ANDROID_LIBS_DIR/include/zstd.h" ]]; then
             MISSING_LIBS+=("zstd.h")
           fi
-          
+
           # Check library files
           if [[ ! -f "$ANDROID_LIBS_DIR/lib/liblzma.so" ]]; then
             MISSING_LIBS+=("liblzma.so")
@@ -373,7 +369,7 @@ jobs:
           if [[ ! -f "$ANDROID_LIBS_DIR/lib/libzstd.so" ]]; then
             MISSING_LIBS+=("libzstd.so")
           fi
-          
+
           if [[ ${#MISSING_LIBS[@]} -gt 0 ]]; then
             echo "❌ Missing required libraries:"
             for lib in "${MISSING_LIBS[@]}"; do
@@ -385,13 +381,13 @@ jobs:
             echo "  Libraries: $ANDROID_LIBS_DIR/lib/"
             exit 1
           fi
-          
+
           echo "✅ All required libraries found!"
-          
+
           # Set CGO flags for Android ARM64 libraries
           CGO_CFLAGS="-I$ANDROID_LIBS_DIR/include"
           CGO_LDFLAGS="-L$ANDROID_LIBS_DIR/lib -llzma -lbrotlidec -lbrotlienc -lbrotlicommon -lbz2 -lzstd -Wl,-rpath,/data/data/com.termux/files/usr/lib"
-          
+
           echo "📦 Building with CGO (Android ARM64 native libraries)..."
           CGO_CFLAGS="$CGO_CFLAGS" \
           CGO_LDFLAGS="$CGO_LDFLAGS" \
