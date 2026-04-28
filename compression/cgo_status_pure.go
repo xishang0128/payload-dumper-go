@@ -1,5 +1,4 @@
-//go:build (!cgo) || force_pure_compression
-// +build !cgo force_pure_compression
+//go:build !cgo || force_pure_compression
 
 package compression
 

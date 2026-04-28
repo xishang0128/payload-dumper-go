@@ -10,8 +10,6 @@ type CommonMessages struct {
 	ErrorFailedToMarshalJSON  string
 
 	// DNS and network messages
-	DNSResolvConfNotFound       string
-	DNSUsingFallbackServers     string
 	DNSFailedToConnectToServers string
 	DNSNoIPAddressesFound       string
 	DNSFailedToConnect          string
@@ -43,8 +41,6 @@ var EnglishCommonMessages = CommonMessages{
 	ErrorFailedToWriteFile:    "Failed to write file: %v",
 	ErrorFailedToMarshalJSON:  "Failed to marshal JSON: %v",
 
-	DNSResolvConfNotFound:       "System does not have /etc/resolv.conf",
-	DNSUsingFallbackServers:     "Using fallback DNS servers: %s",
 	DNSFailedToConnectToServers: "failed to connect to any DNS server: %v",
 	DNSNoIPAddressesFound:       "no IP addresses found for host %s",
 	DNSFailedToConnect:          "failed to connect to %s",
@@ -74,8 +70,6 @@ var ChineseCommonMessages = CommonMessages{
 	ErrorFailedToWriteFile:    "无法写入文件: %v",
 	ErrorFailedToMarshalJSON:  "无法序列化JSON: %v",
 
-	DNSResolvConfNotFound:       "系统没有 /etc/resolv.conf 文件",
-	DNSUsingFallbackServers:     "使用备用DNS服务器: %s",
 	DNSFailedToConnectToServers: "无法连接到任何DNS服务器: %v",
 	DNSNoIPAddressesFound:       "未找到主机 %s 的IP地址",
 	DNSFailedToConnect:          "无法连接到 %s",

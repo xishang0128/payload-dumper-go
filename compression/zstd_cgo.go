@@ -1,5 +1,4 @@
 //go:build (cgo && !force_pure_compression && !pure_zstd) || force_cgo_compression || cgo_zstd
-// +build cgo,!force_pure_compression,!pure_zstd force_cgo_compression cgo_zstd
 
 package compression
 

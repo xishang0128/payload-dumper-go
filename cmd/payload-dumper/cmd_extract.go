@@ -554,10 +554,7 @@ func (pm *progressManager) updateTotalProgress(partitionName string, completedOp
 	var actualCompleted int64
 	for partName, total := range pm.partitionTotals {
 		if total > 0 {
-			current := pm.partitionCurrent[partName]
-			if current > total {
-				current = total // Cap at maximum
-			}
+			current := min(pm.partitionCurrent[partName], total) // Cap at maximum
 			actualCompleted += int64(current)
 		}
 	}

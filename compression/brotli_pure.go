@@ -1,5 +1,4 @@
-//go:build (!cgo) || force_pure_compression || pure_brotli
-// +build !cgo force_pure_compression pure_brotli
+//go:build !cgo || force_pure_compression || pure_brotli
 
 package compression
 

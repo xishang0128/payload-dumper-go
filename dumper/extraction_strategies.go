@@ -85,7 +85,7 @@ func (d *Dumper) extractAdaptive(parts []*PartitionWithOps, outputDir string, cp
 	}
 	close(workChan)
 
-	for i := 0; i < optWorkers; i++ {
+	for i := range optWorkers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()

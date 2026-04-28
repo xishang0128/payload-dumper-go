@@ -56,9 +56,9 @@ func parseMeta(metadata []byte) map[string]string {
 			continue
 		}
 
-		if idx := strings.Index(line, "="); idx != -1 {
-			key := strings.TrimSpace(line[:idx])
-			value := strings.TrimSpace(line[idx+1:])
+		if before, after, ok := strings.Cut(line, "="); ok {
+			key := strings.TrimSpace(before)
+			value := strings.TrimSpace(after)
 			props[key] = value
 		}
 	}

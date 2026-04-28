@@ -95,8 +95,8 @@ func (m *DecompressorManager) GetImplementationInfo() map[CompressionType]string
 }
 
 // GetBuildInfo returns build information about compression support
-func GetBuildInfo() map[string]interface{} {
-	info := map[string]interface{}{
+func GetBuildInfo() map[string]any {
+	info := map[string]any{
 		"go_version": runtime.Version(),
 		"goos":       runtime.GOOS,
 		"goarch":     runtime.GOARCH,

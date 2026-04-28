@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"sync"
@@ -79,8 +80,6 @@ func createCustomCertPool() *x509.CertPool {
 func createHTTPClientWithDNS() *http.Client {
 	if _, err := os.Stat("/etc/resolv.conf"); os.IsNotExist(err) {
 		dnsServers := []string{"223.5.5.5:53", "1.1.1.1:53"}
-		fmt.Printf("%s, %s", i18n.I18nMsg.Common.DNSResolvConfNotFound,
-			fmt.Sprintf(i18n.I18nMsg.Common.DNSUsingFallbackServers, dnsServers))
 
 		dialer := &net.Dialer{
 			Timeout: HTTPClientTimeout,
@@ -222,34 +221,9 @@ type HTTPFile struct {
 func NewHTTPFile(url string) (*HTTPFile, error) {
 	client := createHTTPClientWithDNS()
 
-	req, err := http.NewRequest("HEAD", url, nil)
+	size, err := getHTTPFileSize(client, url)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("User-Agent", UserAgent)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.Header.Get("Accept-Ranges") != "bytes" {
-		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDoesNotSupportRanges)
-	}
-
-	contentLength := resp.Header.Get("Content-Length")
-	if contentLength == "" {
-		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteHasNoLength)
-	}
-
-	size, err := strconv.ParseInt(contentLength, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPInvalidContentLength, err)
-	}
-
-	if size == 0 {
-		return nil, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteHasNoLength)
 	}
 
 	return &HTTPFile{
@@ -257,6 +231,97 @@ func NewHTTPFile(url string) (*HTTPFile, error) {
 		client: client,
 		size:   size,
 	}, nil
+}
+
+func getHTTPFileSize(client *http.Client, url string) (int64, error) {
+	size, ranges, err := getHTTPFileSizeFromHEAD(client, url)
+	if err == nil && ranges {
+		return size, nil
+	}
+
+	return getHTTPFileSizeFromRange(client, url)
+}
+
+func getHTTPFileSizeFromHEAD(client *http.Client, url string) (int64, bool, error) {
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, false, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
+	}
+
+	size, err := parseContentLength(resp.Header.Get("Content-Length"))
+	if err != nil {
+		return 0, hasByteRange(resp.Header), err
+	}
+
+	return size, hasByteRange(resp.Header), nil
+}
+
+func getHTTPFileSizeFromRange(client *http.Client, url string) (int64, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Range", "bytes=0-0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		return 0, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteDidNotReturnPartial, resp.StatusCode)
+	}
+
+	return parseContentRangeSize(resp.Header.Get("Content-Range"))
+}
+
+func hasByteRange(header http.Header) bool {
+	for _, value := range header.Values("Accept-Ranges") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "bytes") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseContentLength(contentLength string) (int64, error) {
+	if contentLength == "" {
+		return 0, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteHasNoLength)
+	}
+
+	size, err := strconv.ParseInt(contentLength, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf(i18n.I18nMsg.Common.HTTPInvalidContentLength, err)
+	}
+	if size == 0 {
+		return 0, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteHasNoLength)
+	}
+
+	return size, nil
+}
+
+func parseContentRangeSize(contentRange string) (int64, error) {
+	slash := strings.LastIndex(contentRange, "/")
+	if slash < 0 || slash == len(contentRange)-1 {
+		return 0, fmt.Errorf(i18n.I18nMsg.Common.HTTPRemoteHasNoLength)
+	}
+
+	return parseContentLength(strings.TrimSpace(contentRange[slash+1:]))
 }
 
 func (f *HTTPFile) ReadAt(p []byte, off int64) (n int, err error) {
