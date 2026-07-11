@@ -9,20 +9,11 @@ type CommonMessages struct {
 	ErrorFailedToWriteFile    string
 	ErrorFailedToMarshalJSON  string
 
-	// DNS and network messages
-	DNSFailedToConnectToServers string
-	DNSNoIPAddressesFound       string
-	DNSFailedToConnect          string
-
 	// HTTP error messages
-	HTTPRemoteDoesNotSupportRanges string
-	HTTPRemoteHasNoLength          string
-	HTTPInvalidContentLength       string
-	HTTPRemoteDidNotReturnPartial  string
+	HTTPRemoteHasNoLength string
 
 	// Read-related errors
 	HTTPRemoteReadUnexpectedEOF string
-	HTTPReadFailedAfterRetries  string
 
 	// Common flag descriptions
 	FlagOut       string
@@ -41,18 +32,10 @@ var EnglishCommonMessages = CommonMessages{
 	ErrorFailedToWriteFile:    "Failed to write file: %v",
 	ErrorFailedToMarshalJSON:  "Failed to marshal JSON: %v",
 
-	DNSFailedToConnectToServers: "failed to connect to any DNS server: %v",
-	DNSNoIPAddressesFound:       "no IP addresses found for host %s",
-	DNSFailedToConnect:          "failed to connect to %s",
-
-	HTTPRemoteDoesNotSupportRanges: "remote does not support ranges",
-	HTTPRemoteHasNoLength:          "remote has no length",
-	HTTPInvalidContentLength:       "invalid content length: %v",
-	HTTPRemoteDidNotReturnPartial:  "remote did not return partial content: %d",
+	HTTPRemoteHasNoLength: "remote has no length",
 
 	// Read-related errors
 	HTTPRemoteReadUnexpectedEOF: "unexpected EOF while reading range %s: read %d/%d bytes",
-	HTTPReadFailedAfterRetries:  "failed to read range after retries",
 
 	FlagOut:       "output directory",
 	FlagJSON:      "output as JSON",
@@ -70,18 +53,10 @@ var ChineseCommonMessages = CommonMessages{
 	ErrorFailedToWriteFile:    "无法写入文件: %v",
 	ErrorFailedToMarshalJSON:  "无法序列化JSON: %v",
 
-	DNSFailedToConnectToServers: "无法连接到任何DNS服务器: %v",
-	DNSNoIPAddressesFound:       "未找到主机 %s 的IP地址",
-	DNSFailedToConnect:          "无法连接到 %s",
-
-	HTTPRemoteDoesNotSupportRanges: "远程服务器不支持范围请求",
-	HTTPRemoteHasNoLength:          "远程服务器未提供内容长度",
-	HTTPInvalidContentLength:       "无效的内容长度: %v",
-	HTTPRemoteDidNotReturnPartial:  "远程服务器未返回部分内容：%d",
+	HTTPRemoteHasNoLength: "远程服务器未提供内容长度",
 
 	// Read-related errors
 	HTTPRemoteReadUnexpectedEOF: "读取范围时出现意外 EOF：%s，已读取 %d/%d 字节",
-	HTTPReadFailedAfterRetries:  "多次重试后读取范围失败",
 
 	FlagOut:       "输出目录",
 	FlagJSON:      "以 JSON 格式输出",

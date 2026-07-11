@@ -33,25 +33,23 @@ const (
 	minVerifyBufSize      = 64 * 1024
 	defaultProgressWidth  = 60
 	defaultPageSize       = 15
-	httpTimeout           = 300 * time.Second
 	verifyJobsBuffer      = 128
 	maxPartitionNameLen   = 24
 	partitionNameTruncate = 21
 )
 
 var (
-	extractOut                      string
-	extractPartitions               string
-	extractAll                      bool // Extract all partitions
-	extractHTTPWorkers              int
-	extractHTTPCacheSize            string
-	extractVerify                   bool
-	extractPprofAddr                string
-	extractHeapProfile              string
-	extractMaxBufferMB              int
-	extractPartitionSizeThresholdMB int    // Partition size threshold (in MB) to distinguish between large and small partitions
-	extractStrategy                 string // Extraction strategy: "sequential" or "adaptive"
-	extractCPUCount                 int    // Number of CPU cores to use (0 = auto-detect)
+	extractOut         string
+	extractPartitions  string
+	extractAll         bool // Extract all partitions
+	extractHTTPWorkers int
+	extractPartSize    string
+	extractVerify      bool
+	extractPprofAddr   string
+	extractHeapProfile string
+	extractMaxBufferMB int
+	extractStrategy    string // Extraction strategy: "sequential" or "adaptive"
+	extractCPUCount    int    // Number of CPU cores to use (0 = auto-detect)
 )
 
 func initExtractCmd() {
@@ -67,9 +65,8 @@ func initExtractCmd() {
 	extractCmd.Flags().StringVarP(&extractPartitions, "partitions", "p", "", i18n.I18nMsg.Extract.FlagPartitions)
 	extractCmd.Flags().BoolVarP(&extractAll, "all", "a", false, i18n.I18nMsg.Extract.FlagAll)
 	extractCmd.Flags().IntVar(&extractHTTPWorkers, "http-workers", 0, i18n.I18nMsg.Extract.FlagHTTPWorkers)
-	extractCmd.Flags().StringVar(&extractHTTPCacheSize, "http-cache-size", "", i18n.I18nMsg.Extract.FlagHTTPCacheSize)
+	extractCmd.Flags().StringVar(&extractPartSize, "part-size", "", i18n.I18nMsg.Extract.FlagPartSize)
 	extractCmd.Flags().IntVar(&extractMaxBufferMB, "max-buffer-mb", defaultMaxBufferMB, i18n.I18nMsg.Extract.FlagMaxBufferMB)
-	extractCmd.Flags().IntVar(&extractPartitionSizeThresholdMB, "partition-size-threshold-mb", 128, i18n.I18nMsg.Extract.FlagPartitionSizeThresholdMB)
 	extractCmd.Flags().StringVar(&extractStrategy, "strategy", "adaptive", i18n.I18nMsg.Extract.FlagStrategy)
 	extractCmd.Flags().IntVar(&extractCPUCount, "cpu-count", runtime.NumCPU(), i18n.I18nMsg.Extract.FlagCPUCount)
 	extractCmd.Flags().StringVar(&extractPprofAddr, "pprof-addr", "", i18n.I18nMsg.Extract.FlagPprofAddr)
@@ -86,10 +83,9 @@ func runExtract(cmd *cobra.Command, args []string) {
 	payloadFile := args[0]
 
 	setupExtractionConfig()
+	configureHTTP()
 	pprofServer := startPprofServer()
 	defer stopPprofServer(pprofServer)
-
-	configureHTTPClient()
 
 	d, err := createDumper(payloadFile)
 	if err != nil {
@@ -133,12 +129,18 @@ func setupExtractionConfig() {
 		extractMaxBufferMB = defaultMaxBufferMB
 	}
 	dumper.MaxBufferSize = int64(extractMaxBufferMB) * 1024 * 1024
+}
 
-	// Set partition size threshold for distinguishing between large and small partitions
-	if extractPartitionSizeThresholdMB < 0 {
-		extractPartitionSizeThresholdMB = 128 // Default to 128MB
+func configureHTTP() {
+	file.SetHTTPMaxConcurrentRequests(extractHTTPWorkers)
+	if extractPartSize == "" {
+		return
 	}
-	dumper.SetMultithreadThreshold(uint64(extractPartitionSizeThresholdMB) * 1024 * 1024)
+	partSize, err := parseSizeString(extractPartSize)
+	if err != nil {
+		log.Fatalf(i18n.I18nMsg.Extract.ErrorInvalidPartSize, err)
+	}
+	file.SetHTTPPartSize(partSize)
 }
 
 // startPprofServer starts the pprof server if requested
@@ -183,20 +185,6 @@ func getPartitionNames(payloadFile string) ([]string, error) {
 	}
 
 	return selectPartitionsInteractively(payloadFile)
-}
-
-// configureHTTPClient sets up HTTP client parameters
-func configureHTTPClient() {
-	file.SetHTTPClientTimeout(httpTimeout)
-	file.SetHTTPMaxConcurrentRequests(extractHTTPWorkers)
-
-	if extractHTTPCacheSize != "" {
-		if v, err := parseSizeString(extractHTTPCacheSize); err == nil {
-			file.SetHTTPReadCacheSize(v)
-		} else {
-			log.Fatalf(i18n.I18nMsg.Extract.ErrorInvalidHTTPCacheSize, err)
-		}
-	}
 }
 
 // closeDumper safely closes the dumper
@@ -460,7 +448,7 @@ func (vm *verificationManager) verifyPartition(partName string, buf []byte) erro
 	}
 
 	if expectedHex == "" {
-		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorNoExpectedHashInManifest)
+		return fmt.Errorf("%s", i18n.I18nMsg.Dumper.ErrorNoExpectedHashInManifest)
 	}
 
 	path := filepath.Join(extractOut, partName+".img")
@@ -691,7 +679,7 @@ func selectPartitionsInteractively(payloadFile string) ([]string, error) {
 	}
 
 	if len(partitions) == 0 {
-		return nil, fmt.Errorf(i18n.I18nMsg.Extract.NoPartitionsFound)
+		return nil, fmt.Errorf("%s", i18n.I18nMsg.Extract.NoPartitionsFound)
 	}
 
 	options := createPartitionOptions(partitions)
@@ -703,7 +691,7 @@ func selectPartitionsInteractively(payloadFile string) ([]string, error) {
 	selectedPartitions := parseSelectedPartitions(selectedOptions)
 
 	if len(selectedPartitions) == 0 {
-		return nil, fmt.Errorf(i18n.I18nMsg.Extract.NoPartitionsSelected)
+		return nil, fmt.Errorf("%s", i18n.I18nMsg.Extract.NoPartitionsSelected)
 	}
 
 	return selectedPartitions, nil
@@ -778,41 +766,34 @@ func createDumper(p string) (*dumper.Dumper, error) {
 	return dumper.New(reader)
 }
 
-// parseSizeString parses size strings like "4M", "256K", "1G" into bytes
 func parseSizeString(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, nil
 	}
 
-	last := s[len(s)-1]
 	multiplier := int64(1)
-	numStr := s
-
-	switch last {
+	number := s
+	switch s[len(s)-1] {
 	case 'K', 'k':
 		multiplier = 1 << 10
-		numStr = s[:len(s)-1]
+		number = s[:len(s)-1]
 	case 'M', 'm':
 		multiplier = 1 << 20
-		numStr = s[:len(s)-1]
+		number = s[:len(s)-1]
 	case 'G', 'g':
 		multiplier = 1 << 30
-		numStr = s[:len(s)-1]
+		number = s[:len(s)-1]
 	}
 
-	numStr = strings.TrimSpace(numStr)
-	if numStr == "" {
-		return 0, fmt.Errorf("invalid size")
-	}
-
-	v, err := strconv.ParseFloat(numStr, 64)
+	value, err := strconv.ParseFloat(strings.TrimSpace(number), 64)
 	if err != nil {
 		return 0, err
 	}
-
-	bytes := int64(v * float64(multiplier))
-	return bytes, nil
+	if value <= 0 {
+		return 0, fmt.Errorf("size must be positive")
+	}
+	return int64(value * float64(multiplier)), nil
 }
 
 // getExtractionStrategy converts string strategy to dumper.ExtractionStrategy

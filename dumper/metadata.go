@@ -35,7 +35,7 @@ func (d *Dumper) parseMetadata() error {
 	}
 
 	if len(buf) != headLen {
-		return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorInsufficientDataForHeader)
+		return fmt.Errorf("%s", i18n.I18nMsg.Dumper.ErrorInsufficientDataForHeader)
 	}
 
 	magic := string(buf[:4])

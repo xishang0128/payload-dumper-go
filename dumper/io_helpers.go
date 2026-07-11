@@ -155,7 +155,7 @@ func (d *Dumper) procOp(op Operation, outFile *os.File, oldFile *os.File, isDiff
 
 	case metadata.InstallOperation_SOURCE_COPY:
 		if !isDiff {
-			return fmt.Errorf(i18n.I18nMsg.Dumper.ErrorSourceCopyOnlyForDiff)
+			return fmt.Errorf("%s", i18n.I18nMsg.Dumper.ErrorSourceCopyOnlyForDiff)
 		}
 		return d.srcCopy(outFile, oldFile, operation)
 

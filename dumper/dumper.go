@@ -231,7 +231,7 @@ func (d *Dumper) size(partition *metadata.PartitionUpdate) uint64 {
 
 func (d *Dumper) multi(partition *metadata.PartitionUpdate) bool {
 	sizeInBytes := d.size(partition)
-	return sizeInBytes > MultithreadThreshold
+	return sizeInBytes > multithreadThreshold
 }
 
 func (d *Dumper) ShouldUseMultithread(partition *metadata.PartitionUpdate) bool {

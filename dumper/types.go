@@ -89,11 +89,7 @@ type Dumper struct {
 
 var MaxBufferSize int64 = 64 * 1024 * 1024
 
-var MultithreadThreshold uint64 = 128 * 1024 * 1024
-
-func SetMultithreadThreshold(threshold uint64) {
-	MultithreadThreshold = threshold
-}
+const multithreadThreshold = 128 * 1024 * 1024
 
 // PartitionInfo contains information about a partition
 type PartitionInfo struct {
