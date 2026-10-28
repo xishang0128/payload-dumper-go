@@ -7,7 +7,7 @@ set -e
 
 BUILD_TYPE="${1:-build}"
 OUTPUT_DIR="./bin"
-ANDROID_LIBS_DIR="/Users/atri/git/other/android-arm64"
+ANDROID_LIBS_DIR="${ANDROID_LIBS_DIR:-/Users/atri/git/other/android-arm64}"
 
 # Embed version and build time into binaries
 VERSION="${VERSION:-dev}"
@@ -97,6 +97,24 @@ case "$BUILD_TYPE" in
         
         echo "✅ All required libraries found!"
         echo ""
+
+        PKG_CONFIG_DIR="$ANDROID_LIBS_DIR/lib/pkgconfig"
+        mkdir -p "$PKG_CONFIG_DIR"
+        for library in brotlicommon brotlidec brotlienc; do
+            cat > "$PKG_CONFIG_DIR/lib${library}.pc" <<EOF
+prefix=$ANDROID_LIBS_DIR
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: lib${library}
+Description: Android ARM64 Brotli ${library} library
+Version: 1
+Libs: -L\${libdir} -l${library}
+Cflags: -I\${includedir}
+EOF
+        done
+        export PKG_CONFIG_PATH="$PKG_CONFIG_DIR${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
         
         # Build the Android ARM64 binary
         echo "📦 Building with CGO (Android ARM64 native libraries)..."

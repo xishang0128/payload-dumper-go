@@ -384,6 +384,24 @@ jobs:
 
           echo "✅ All required libraries found!"
 
+          PKG_CONFIG_DIR="$ANDROID_LIBS_DIR/lib/pkgconfig"
+          mkdir -p "$PKG_CONFIG_DIR"
+          for library in brotlicommon brotlidec brotlienc; do
+            cat > "$PKG_CONFIG_DIR/lib${library}.pc" <<EOF
+          prefix=$ANDROID_LIBS_DIR
+          exec_prefix=\${prefix}
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: lib${library}
+          Description: Android ARM64 Brotli ${library} library
+          Version: 1
+          Libs: -L\${libdir} -l${library}
+          Cflags: -I\${includedir}
+          EOF
+          done
+          export PKG_CONFIG_PATH="$PKG_CONFIG_DIR${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
           # Set CGO flags for Android ARM64 libraries
           CGO_CFLAGS="-I$ANDROID_LIBS_DIR/include"
           CGO_LDFLAGS="-L$ANDROID_LIBS_DIR/lib -llzma -lbrotlidec -lbrotlienc -lbrotlicommon -lbz2 -lzstd -Wl,-rpath,/data/data/com.termux/files/usr/lib"
